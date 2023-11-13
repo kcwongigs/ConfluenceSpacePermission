@@ -8,6 +8,7 @@ import java.security.InvalidParameterException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -65,6 +66,9 @@ public class WebRequest {
 		do {
 			// Update cursor if exist
 			if (cursor != null) {
+				if (queryParameters == null) {
+					queryParameters = new HashMap<>();
+				}
 				queryParameters.put(Paged.CURSOR_PARAMETER, cursor);
 			}
 			Response resp = invoke(

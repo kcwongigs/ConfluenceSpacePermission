@@ -50,47 +50,7 @@ public class ConfluenceSpacePermission {
 	private static final String PATH_CLOUD_ADD_PERMISSION = "/wiki/rest/api/space/{spaceKey}/permission";	// POST
 	private static final String PATH_CLOUD_REMOVE_PERMISSION = "/wiki/rest/api/space/{spaceKey}/permission/{id}";	// DELETE
 	
-	public enum DCSpacePermission {
-		EDITSPACE("Edit space"),
-		VIEWSPACE("View space"),
-		EXPORTPAGE("Export page"),
-		SETPAGEPERMISSIONS("Set page permissions"),
-		REMOVEPAGE("Remove page"),
-		EDITBLOG("Edit blog"),
-		REMOVEBLOG("Remove blog"),
-		COMMENT("Comment"),
-		REMOVECOMMENT("Remove comment"),
-		CREATEATTACHMENT("Create attachment"),
-		REMOVEATTACHMENT("Remove attachment"),
-		REMOVEMAIL("Remove email"),
-		EXPORTSPACE("Export space"),
-		SETSPACEPERMISSIONS("Set space permissions");
-		DCSpacePermission(String description) {
-			this.description = description;
-		}
-		private String description;
-		public String getDescription() {
-			return description;
-		}
-	}
-	
-	public enum CloudSpacePermission {
-		administer, 
-		archive, 
-		copy, 
-		create, 
-		delete, 
-		export, 
-		move, 
-		purge, 
-		purge_version, 
-		read, 
-		restore, 
-		restrict_content, 
-		update, 
-		use
-	}
-	
+	@SuppressWarnings("rawtypes")
 	public static <T extends Enum> String getEnumOptions(Class<T> enumClass, String descriptionMethod) {
 		StringBuilder sb = new StringBuilder();
 		try {
@@ -265,9 +225,10 @@ public class ConfluenceSpacePermission {
 		Log.error(LOGGER, ((add)? "Failed to add " : "Failed to remove ") + obj.toString() + ": " + msg);
 	}
 	
-	private static void logResult(boolean add, Object obj, Response resp) {
+	private static boolean logResult(boolean add, Object obj, Response resp) {
 		if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
 			Log.info(LOGGER, ((add)? "Added " : "Removed ") + obj.toString());
+			return true;
 		} else {
 			String msg = null;
 			try {
@@ -276,10 +237,13 @@ public class ConfluenceSpacePermission {
 				Log.error(LOGGER, "Failed to read web request response", ex);
 			}
 			Log.error(LOGGER, ((add)? "Failed to add " : "Failed to remove ") + obj.toString() + ": " + msg);
+			return false;
 		}
 	}
 	
 	private static boolean processDataCenter(String[] args) {
+		int total = 0;
+		int success = 0;
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(dcOptions, args, true);
@@ -287,7 +251,12 @@ public class ConfluenceSpacePermission {
 			String host = cmd.getOptionValue(hostOption);
 			String admin = cmd.getOptionValue(adminOption);
 			// Get password 
-			String password = new String(Console.readPassword("Administrator password: "));
+			String password = null;
+			if (cmd.hasOption(passwordOption)) {
+				password = cmd.getOptionValue(passwordOption);
+			} else {
+				password = new String(Console.readPassword("Administrator API token: "));
+			}
 			String[] spaceKeys = cmd.getOptionValues(spaceKeyOption);
 			if (spaceKeys.length == 1 && ALL_SPACES.equals(spaceKeys[0])) {
 				Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
@@ -335,12 +304,15 @@ public class ConfluenceSpacePermission {
 					// For each action & target
 					if (addUsers != null) {
 						for (String addUser : addUsers) {
+							total++;
 							DCDataObject obj = new DCDataObject(spaceKey, permission, addUser);
 							try {
 								Response resp = WebRequest.invoke(
 										scheme, host, PATH_DC_ADD_SPACE_PERMISSION, null,
 										HttpMethod.POST, admin, password, null, null, null, obj.format());
-								logResult(true, obj, resp);
+								if (logResult(true, obj, resp)) {
+									success++;
+								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(true, obj, ex.getMessage());
@@ -349,12 +321,15 @@ public class ConfluenceSpacePermission {
 					}
 					if (removeUsers != null) {
 						for (String removeUser : removeUsers) {
+							total++;
 							DCDataObject obj = new DCDataObject(spaceKey, permission, removeUser);
 							try {
 								Response resp = WebRequest.invoke(
 										scheme, host, PATH_DC_REMOVE_SPACE_PERMISSION, null, 
 										HttpMethod.POST, admin, password, null, null, null, obj.format());
-								logResult(false, obj, resp);
+								if (logResult(false, obj, resp)) {
+									success++;
+								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(false, obj, ex.getMessage());
@@ -363,12 +338,15 @@ public class ConfluenceSpacePermission {
 					}
 					if (addGroups != null) {
 						for (String addGroup : addGroups) {
+							total++;
 							DCDataObject obj = new DCDataObject(spaceKey, permission, addGroup);
 							try {
 								Response resp = WebRequest.invoke(
 										scheme, host, PATH_DC_ADD_SPACE_PERMISSION, null, 
 										HttpMethod.POST, admin, password, null, null, null, obj.format());
-								logResult(true, obj, resp);
+								if (logResult(true, obj, resp)) {
+									success++;
+								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(true, obj, ex.getMessage());
@@ -377,12 +355,15 @@ public class ConfluenceSpacePermission {
 					}
 					if (removeGroups != null) {
 						for (String removeGroup : removeGroups) {
+							total++;
 							DCDataObject obj = new DCDataObject(spaceKey, permission, removeGroup);
 							try {
 								Response resp = WebRequest.invoke(
 										scheme, host, PATH_DC_REMOVE_SPACE_PERMISSION, null, 
 										HttpMethod.POST, admin, password, null, null, null, obj.format());
-								logResult(false, obj, resp);
+								if (logResult(false, obj, resp)) {
+									success++;
+								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(false, obj, ex.getMessage());
@@ -398,10 +379,13 @@ public class ConfluenceSpacePermission {
 		} catch (IOException ioex) {
 			Log.error(LOGGER, "Unable to read password", ioex);
 		}
+		Log.info(LOGGER, "Success/total: " + success + "/" + total);
 		return true;
 	}
 	
 	private static boolean processCloud(String[] args) {
+		int total = 0;
+		int success = 0;
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudOptions, args, true);
@@ -409,32 +393,39 @@ public class ConfluenceSpacePermission {
 			String host = cmd.getOptionValue(hostOption);
 			String admin = cmd.getOptionValue(adminOption);
 			// Get api token
-			String password = new String(Console.readPassword("Administrator API token: "));
+			String password = null;
+			if (cmd.hasOption(passwordOption)) {
+				password = cmd.getOptionValue(passwordOption);
+			} else {
+				password = new String(Console.readPassword("Administrator API token: "));
+			}
 			String[] spaceKeys = cmd.getOptionValues(spaceKeyOption);
+			// Get all spaces
 			Map<String, String> spaceKeysToSpaceId = new HashMap<>();
+			try {
+				Map<String, Object> query = new HashMap<>();
+				List<SpaceObject> spaceObjects = WebRequest.fetchObjects(
+						scheme, host, PATH_CLOUD_GET_SPACES, null, 
+						HttpMethod.GET, admin, password, null, null, query, null, SpaceObjects.class);
+				for (SpaceObject so : spaceObjects) {
+					spaceKeysToSpaceId.put(so.getKey(), so.getId());
+				}
+			} catch (Exception ex) {
+				Log.error(LOGGER, "Failed to retrieve space list", ex);
+				return true;
+			}
 			if (spaceKeys.length == 1 && ALL_SPACES.equals(spaceKeys[0])) {
 				Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
-				// Get all spaces
-				try {
-					Map<String, Object> query = new HashMap<>();
-					List<SpaceObject> spaceObjects = WebRequest.fetchObjects(
-							scheme, host, PATH_CLOUD_GET_SPACES, null, 
-							HttpMethod.GET, admin, password, null, null, query, null, SpaceObjects.class);
-					for (SpaceObject so : spaceObjects) {
-						spaceKeysToSpaceId.put(so.getKey(), so.getId());
-						Log.info(LOGGER, "Space found: " + so.getKey() + " = " + so.getId());
-					}
-					spaceKeys = spaceKeysToSpaceId.keySet().toArray(new String[0]);
-				} catch (Exception ex) {
-					Log.error(LOGGER, "Failed to retrieve space list", ex);
-					return true;
+				for (Map.Entry<String, String> entry : spaceKeysToSpaceId.entrySet()) {
+					Log.info(LOGGER, "Space found: " + entry.getKey() + " = " + entry.getValue());
 				}
+				spaceKeys = spaceKeysToSpaceId.keySet().toArray(new String[0]);
 			}
+			List<CloudSpacePermission> permissionList = new ArrayList<>();
 			String[] permissions = cmd.getOptionValues(dcPermissionOption);
-			List<DCSpacePermission> permissionList = new ArrayList<>();
 			for (String permission : permissions) {
 				try {
-					DCSpacePermission parsed = DCSpacePermission.valueOf(permission);
+					CloudSpacePermission parsed = CloudSpacePermission.valueOf(permission);
 					permissionList.add(parsed);
 				} catch (Exception ex) {
 					Log.error(LOGGER, "Invalid permission ignored: " + permission);
@@ -446,26 +437,46 @@ public class ConfluenceSpacePermission {
 			String[] removeGroups = cmd.getOptionValues(removeGroupOption);
 			// For each space
 			for (String spaceKey : spaceKeys) {
+				List<GetPermission> permissionObjectList = new ArrayList<>();
+				if (removeUsers != null || removeGroups != null) {
+					Map<String, String> pathMap = new HashMap<>();
+					pathMap.put("id", spaceKeysToSpaceId.get(spaceKey));
+					try {
+						permissionObjectList = WebRequest.fetchObjects(
+							scheme, host, PATH_CLOUD_GET_PERMISSION_ID, pathMap, 
+							HttpMethod.GET, admin, password, null, null, null, null, GetPermissions.class);
+					} catch (Exception ex) {
+						Log.error(LOGGER, "Unable to retrieve permission list", ex);
+						continue;
+					}
+				}
 				// For each permission
-				for (String permission : permissions) {
+				for (CloudSpacePermission permission : permissionList) {
 					// For each action & target
 					if (addUsers != null) {
 						for (String addUser : addUsers) {
-							AddPermission data = new AddPermission();
+							total++;
+							String data = "Target: " + addUser + 
+									" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
+									" Space: " + spaceKey;
+							AddPermission obj = new AddPermission();
 							Operation operation = new Operation();
-							operation.setKey(permission);
-							data.setOperation(operation);
+							operation.setKey(permission.getKey());
+							operation.setTarget(permission.getTarget());
+							obj.setOperation(operation);
 							Subject subject = new Subject();
 							subject.setIdentifier(addUser);
 							subject.setType(Subject.SUBJECT_TYPE_USER);
-							data.setSubject(subject);
+							obj.setSubject(subject);
 							try {
 								Map<String, String> pathMap = new HashMap<>();
 								pathMap.put("spaceKey", spaceKey);
 								Response resp = WebRequest.invoke(
 										scheme, host, PATH_CLOUD_ADD_PERMISSION, pathMap,
-										HttpMethod.POST, admin, password, null, null, null, data);
-								logResult(true, data, resp);
+										HttpMethod.POST, admin, password, null, null, null, obj);
+								if (logResult(true, data, resp)) {
+									success++;
+								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(true, data, ex.getMessage());
@@ -474,59 +485,69 @@ public class ConfluenceSpacePermission {
 					}
 					if (removeUsers != null) {
 						for (String removeUser : removeUsers) {
-							String data = "Target: " + removeUser + " Permission: " + permission + " Space: " + spaceKey;
+							total++;
+							String data = "Target: " + removeUser + 
+									" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
+									" Space: " + spaceKey;
 							// Get the permission ids and locate a match
-							Map<String, String> pathMap = new HashMap<>();
-							pathMap.put("id", spaceKeysToSpaceId.get(spaceKey));
-							List<GetPermission> permissionObjectList = null;
 							String permissionId = null;
-							try {
-								permissionObjectList = WebRequest.fetchObjects(
-									scheme, host, PATH_CLOUD_GET_PERMISSION_ID, pathMap, 
-									HttpMethod.GET, admin, password, null, null, null, null, GetPermissions.class);
-								for (GetPermission item : permissionObjectList) {
-									if (removeUser.equals(item.getPrincipal().getId()) && 
-										Principal.TYPE_USER.equals(item.getPrincipal().getType()) &&
-										Operation.TARGET_SPACE.equals(item.getOperation().getTarget()) &&
-										permission.equals(item.getOperation().getKey())) {
-										permissionId = item.getId();
-										break;
-									}
+							for (GetPermission item : permissionObjectList) {
+//								Log.debug(LOGGER, "Found permission: " + 
+//										item.getOperation().getKey() + " -> " + item.getOperation().getTargetType() + " for " + 
+//										item.getPrincipal().getType() + ": " + item.getPrincipal().getId()
+//										);									
+								if (removeUser.equals(item.getPrincipal().getId()) && 
+									Principal.TYPE_USER.equals(item.getPrincipal().getType()) &&
+									permission.getTarget().equals(item.getOperation().getTargetType()) &&
+									permission.getKey().equals(item.getOperation().getKey())) {
+									permissionId = item.getId();
+									break;
 								}
-								if (permissionId != null) {
-									// Remove it
-									Map<String, String> removePathMap = new HashMap<>();
-									removePathMap.put("spaceKey", spaceKey);
-									removePathMap.put("id", permissionId);
+							}
+							if (permissionId != null) {
+								// Remove it
+								Map<String, String> removePathMap = new HashMap<>();
+								removePathMap.put("spaceKey", spaceKey);
+								removePathMap.put("id", permissionId);
+								try {
 									Response resp = WebRequest.invoke(
 											scheme, host, PATH_CLOUD_REMOVE_PERMISSION, removePathMap, 
 											HttpMethod.DELETE, admin, password, null, null, null, null);
-									logResult(false, data, resp);
+									if (logResult(false, data, resp)) {
+										success++;
+									}
+								} catch (Exception ex) {
+									logError(false, data, ex.getMessage());
 								}
-							} catch (Exception ex) {
-								logError(	false, 
-											data, 
-											ex.getMessage());
+							} else {
+								logError(false, data, "Permission not found");
 							}
 						}
 					}
 					if (addGroups != null) {
 						for (String addGroup : addGroups) {
-							AddPermission data = new AddPermission();
+							total++;
+							String data = "Target: " + addGroup + 
+									" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
+									" Space: " + spaceKey;
+							AddPermission obj = new AddPermission();
 							Operation operation = new Operation();
-							operation.setKey(permission);
-							data.setOperation(operation);
+							operation.setKey(permission.getKey());
+							operation.setTarget(permission.getTarget());
+							obj.setOperation(operation);
 							Subject subject = new Subject();
 							subject.setIdentifier(addGroup);
 							subject.setType(Subject.SUBJECT_TYPE_GROUP);
-							data.setSubject(subject);
+							obj.setSubject(subject);
 							try {
 								Map<String, String> pathMap = new HashMap<>();
 								pathMap.put("spaceKey", spaceKey);
 								Response resp = WebRequest.invoke(
 										scheme, host, PATH_CLOUD_ADD_PERMISSION, pathMap,
-										HttpMethod.POST, admin, password, null, null, null, data);
-								logResult(true, data, resp);
+										HttpMethod.POST, admin, password, null, null, null, obj);
+								if (logResult(true, data, resp)) {
+									success++;
+								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(true, data, ex.getMessage());
@@ -535,39 +556,38 @@ public class ConfluenceSpacePermission {
 					}
 					if (removeGroups != null) {
 						for (String removeGroup : removeGroups) {
-							String data = "Target: " + removeGroup + " Permission: " + permission + " Space: " + spaceKey;
+							total++;
+							String data = "Target: " + removeGroup + 
+									" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
+									" Space: " + spaceKey;
 							// Get the permission ids and locate a match
-							Map<String, String> pathMap = new HashMap<>();
-							pathMap.put("id", spaceKeysToSpaceId.get(spaceKey));
-							List<GetPermission> permissionObjectList = null;
 							String permissionId = null;
-							try {
-								permissionObjectList = WebRequest.fetchObjects(
-									scheme, host, PATH_CLOUD_GET_PERMISSION_ID, pathMap, 
-									HttpMethod.GET, admin, password, null, null, null, null, GetPermissions.class);
-								for (GetPermission item : permissionObjectList) {
-									if (removeGroup.equals(item.getPrincipal().getId()) && 
-										Principal.TYPE_GROUP.equals(item.getPrincipal().getType()) &&
-										Operation.TARGET_SPACE.equals(item.getOperation().getTarget()) &&
-										permission.equals(item.getOperation().getKey())) {
-										permissionId = item.getId();
-										break;
-									}
+							for (GetPermission item : permissionObjectList) {
+								if (removeGroup.equals(item.getPrincipal().getId()) && 
+									Principal.TYPE_GROUP.equals(item.getPrincipal().getType()) &&
+									permission.getTarget().equals(item.getOperation().getTargetType()) &&
+									permission.getKey().equals(item.getOperation().getKey())) {
+									permissionId = item.getId();
+									break;
 								}
-								if (permissionId != null) {
-									// Remove it
-									Map<String, String> removePathMap = new HashMap<>();
-									removePathMap.put("spaceKey", spaceKey);
-									removePathMap.put("id", permissionId);
+							}
+							if (permissionId != null) {
+								// Remove it
+								Map<String, String> removePathMap = new HashMap<>();
+								removePathMap.put("spaceKey", spaceKey);
+								removePathMap.put("id", permissionId);
+								try {
 									Response resp = WebRequest.invoke(
 											scheme, host, PATH_CLOUD_REMOVE_PERMISSION, removePathMap, 
 											HttpMethod.DELETE, admin, password, null, null, null, null);
-									logResult(false, data, resp);
+									if (logResult(false, data, resp)) {
+										success++;
+									}
+								} catch (Exception ex) {
+									logError(false, data, ex.getMessage());
 								}
-							} catch (Exception ex) {
-								logError(	false, 
-											data, 
-											ex.getMessage());
+							} else {
+								logError(false, data, "Permission not found");
 							}
 						}	
 					}
@@ -580,6 +600,7 @@ public class ConfluenceSpacePermission {
 		} catch (IOException ioex) {
 			Log.error(LOGGER, "Unable to read password", ioex);
 		}
+		Log.info(LOGGER, "Success/total: " + success + "/" + total);
 		return true;
 	}
 	
