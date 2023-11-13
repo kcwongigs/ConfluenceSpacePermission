@@ -179,7 +179,7 @@ public class ConfluenceSpacePermission {
 				.option("p")
 				.hasArgs()
 				.desc(	"Required. Multiple. \n" + 
-						"Cloud permission: " + getEnumOptions(CloudSpacePermission.class, null))
+						"Cloud permission: " + getEnumOptions(CloudSpacePermission.class, "getDescription"))
 				.build();
 
 		dcOptions = new Options();
