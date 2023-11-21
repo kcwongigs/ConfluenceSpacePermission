@@ -1,6 +1,7 @@
 package com.igsl;
 
 public enum CloudJiraProjectRole {
+	ADMINISTRATORS("Administrators"),
 	ADMINISTRATOR("Administrator"),
 	MEMBER("Member"),
 	VIEWER("Viewer");
