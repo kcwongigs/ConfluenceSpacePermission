@@ -10,7 +10,7 @@ import org.apache.logging.log4j.Logger;
 
 import com.igsl.Log;
 
-public abstract class Paged<T> {
+public abstract class PagedWithCursor<T> {
 	public static final String CURSOR_PARAMETER = "cursor";
 	private static final Logger LOGGER = LogManager.getLogger();
 	private Links _links;

@@ -2,7 +2,7 @@ package com.igsl.model;
 
 import java.util.List;
 
-public class GetPermissions extends Paged<GetPermission> {
+public class GetPermissions extends PagedWithCursor<GetPermission> {
 	private List<GetPermission> results;
 	@Override
 	public List<GetPermission> getPagedItems() {

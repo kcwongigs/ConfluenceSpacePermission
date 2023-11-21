@@ -2,7 +2,7 @@ package com.igsl.model;
 
 import java.util.List;
 
-public class SpaceObjects extends Paged<SpaceObject> {
+public class SpaceObjects extends PagedWithCursor<SpaceObject> {
 	private List<SpaceObject> results;
 	@Override
 	public List<SpaceObject> getPagedItems() {

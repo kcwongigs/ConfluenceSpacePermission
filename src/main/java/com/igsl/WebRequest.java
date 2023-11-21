@@ -3,7 +3,6 @@ package com.igsl;
 import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.http.HttpResponse;
 import java.security.InvalidParameterException;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -34,7 +33,8 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import com.fasterxml.jackson.jaxrs.json.JacksonJsonProvider;
-import com.igsl.model.Paged;
+import com.igsl.model.PagedWithCursor;
+import com.igsl.model.PagedWithNumber;
 
 /**
  * Utility to send web request
@@ -47,7 +47,45 @@ public class WebRequest {
 			.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 			.configure(SerializationFeature.INDENT_OUTPUT, true);
 	
-	public static <T> List<T> fetchObjects(
+	public static <T> List<T> fetchObjectsWithStartAt(
+			String scheme,
+			String host,
+			String path,
+			Map<String, String> pathParameters,
+			String method,
+			String userName,
+			String password,
+			MultivaluedMap<String, Object> headers,
+			Collection<Cookie> cookies,
+			Map<String, Object> queryParameters,
+			String startAtParameterName,
+			Object data,
+			Class<? extends PagedWithNumber<T>> dataClass
+			) throws UnsupportedEncodingException, URISyntaxException {
+		List<T> result = new ArrayList<>();
+		int startAt = 0;
+		int size = 0;
+		do {
+			// Update cursor if exist
+			if (queryParameters == null) {
+				queryParameters = new HashMap<>();
+			}
+			queryParameters.put(startAtParameterName, startAt);
+			Response resp = invoke(
+					scheme, host, path, pathParameters, method, userName, password, headers, cookies, queryParameters, data);
+			if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+				PagedWithNumber<T> list = resp.readEntity(dataClass);
+				result.addAll(list.getPagedItems());
+				size = list.getPagedItems().size();
+				startAt += size;
+			} else {
+				Log.error(LOGGER, "Error fetching objects: " + resp.getStatus());
+			}
+		} while (size != 0);
+		return result;
+	}	
+	
+	public static <T> List<T> fetchObjectsWithCursor(
 			String scheme,
 			String host,
 			String path,
@@ -59,7 +97,7 @@ public class WebRequest {
 			Collection<Cookie> cookies,
 			Map<String, Object> queryParameters,
 			Object data,
-			Class<? extends Paged<T>> dataClass
+			Class<? extends PagedWithCursor<T>> dataClass
 			) throws UnsupportedEncodingException, URISyntaxException {
 		List<T> result = new ArrayList<>();
 		String cursor = null;
@@ -69,12 +107,12 @@ public class WebRequest {
 				if (queryParameters == null) {
 					queryParameters = new HashMap<>();
 				}
-				queryParameters.put(Paged.CURSOR_PARAMETER, cursor);
+				queryParameters.put(PagedWithCursor.CURSOR_PARAMETER, cursor);
 			}
 			Response resp = invoke(
 					scheme, host, path, pathParameters, method, userName, password, headers, cookies, queryParameters, data);
 			if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
-				Paged<T> list = resp.readEntity(dataClass);
+				PagedWithCursor<T> list = resp.readEntity(dataClass);
 				result.addAll(list.getPagedItems());
 				cursor = list.getNextPageCursor();
 			} else {
@@ -99,9 +137,11 @@ public class WebRequest {
 			) throws UnsupportedEncodingException, URISyntaxException {
 		String modifiedPath = path;
 		if (pathParameters != null) {
+			Log.debug(LOGGER, "Original Path: " + path);
 			for (Map.Entry<String, String> entry : pathParameters.entrySet()) {
 				modifiedPath = modifiedPath.replaceAll(Pattern.quote("{" + entry.getKey() + "}"), entry.getValue());
 			}
+			Log.debug(LOGGER, "Modified Path: " + modifiedPath);
 		}
 		Client client = ClientBuilder.newClient();
 		client.register(JACKSON_JSON_PROVIDER);
