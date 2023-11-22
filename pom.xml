@@ -4,16 +4,16 @@
 
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.igsl</groupId>
-    <artifactId>ConfluenceSpacePermission</artifactId>
-    <version>1.2.0</version>
+    <artifactId>CloudPermission</artifactId>
+    <version>1.3.0</version>
 
     <organization>
         <name>Integrated Global Solutions Limited</name>
         <url>https://www.igsl-group.com/</url>
     </organization>
 
-    <name>ConfluenceSpacePermission</name>
-    <description>Utility to manage space permission for DC and Cloud</description>
+    <name>CloudPermission</name>
+    <description>Utility to manage permission for Jira and Confluence in Data Center/Server and Cloud</description>
     <packaging>jar</packaging>
 
     <dependencies>
@@ -131,7 +131,7 @@
                             <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
                             <addClasspath>true</addClasspath>
                             <classpathPrefix>lib</classpathPrefix>
-                            <mainClass>com.igsl.ConfluenceSpacePermission</mainClass>
+                            <mainClass>com.igsl.PermissionTool</mainClass>
                         </manifest>
                         <manifestEntries>
                             <Class-Path>.</Class-Path>

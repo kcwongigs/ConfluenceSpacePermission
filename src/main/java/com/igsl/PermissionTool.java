@@ -25,10 +25,15 @@ import org.apache.logging.log4j.Logger;
 
 import com.igsl.model.AddPermission;
 import com.igsl.model.AddProjectRoleActor;
+import com.igsl.model.AddRestriction;
+import com.igsl.model.Attachment;
+import com.igsl.model.Attachments;
 import com.igsl.model.DCDataObject;
 import com.igsl.model.GetPermission;
 import com.igsl.model.GetPermissions;
 import com.igsl.model.Operation;
+import com.igsl.model.Page;
+import com.igsl.model.Pages;
 import com.igsl.model.Principal;
 import com.igsl.model.Project;
 import com.igsl.model.ProjectRole;
@@ -40,8 +45,8 @@ import com.igsl.model.Subject;
 /**
  * Utility to manage space permission for Confluence DC and Cloud.
  */
-public class ConfluenceSpacePermission {	
-	private static final Logger LOGGER = LogManager.getLogger(ConfluenceSpacePermission.class);
+public class PermissionTool {	
+	private static final Logger LOGGER = LogManager.getLogger(PermissionTool.class);
 	
 	private static final String DEFAULT_SCHEME = "https";
 	private static final String ALL_SPACES = "%";
@@ -59,6 +64,17 @@ public class ConfluenceSpacePermission {
 	private static final String PATH_CLOUD_GET_PROJECT_ROLES = "/rest/api/2/role";
 	private static final String PATH_CLOUD_PROJECT_ADD_ACTOR = "/rest/api/2/project/{projectIdOrKey}/role/{id}";	// POST
 	private static final String PATH_CLOUD_PROJECT_REMOVE_ACTOR = "/rest/api/2/project/{projectIdOrKey}/role/{id}";	// DELETE
+	
+	private static final String PATH_CLOUD_GET_PAGES = "/wiki/api/v2/pages";	// GET
+	private static final String PATH_CLOUD_GET_ATTACHMENTS = "/wiki/api/v2/attachments";	// GET
+	private static final String PATH_CLOUD_RESTRICTION_ADD_GROUP = 
+			"/wiki/rest/api/content/{id}/restriction/byOperation/{operationKey}/byGroupId/{groupId}";	// PUT
+	private static final String PATH_CLOUD_RESTRICTION_REMOVE_GROUP = 
+			"/wiki/rest/api/content/{id}/restriction/byOperation/{operationKey}/byGroupId/{groupId}";	// DELETE
+	private static final String PATH_CLOUD_RESTRICTION_ADD_USER = 
+			"/wiki/rest/api/content/{id}/restriction/byOperation/{operationKey}/user";	// PUT
+	private static final String PATH_CLOUD_RESTRICTION_REMOVE_USER = 
+			"/wiki/rest/api/content/{id}/restriction/byOperation/{operationKey}/user";	// DELETE
 	
 	@SuppressWarnings("rawtypes")
 	public static <T extends Enum> String getEnumOptions(Class<T> enumClass, String descriptionMethod) {
@@ -86,6 +102,7 @@ public class ConfluenceSpacePermission {
 	private static Options dcOptions;
 	private static Options cloudConfluenceOptions;
 	private static Options cloudJiraOptions;
+	private static Options cloudContentOptions;
 	
 	private static Option addUserOption;
 	private static Option removeUserOption;
@@ -100,8 +117,28 @@ public class ConfluenceSpacePermission {
 	private static Option projectRoleOption;
 	private static Option dcPermissionOption;
 	private static Option cloudPermissionOption;
+	private static Option contentKeyOption;
+	private static Option contentRestrictionOption;
 	
 	static {
+		contentKeyOption = Option.builder()
+				.argName("Content key")
+				.required()
+				.longOpt("contentkey")
+				.option("t")
+				.hasArgs()
+				.desc("Required. Multiple. Page or attachment id. Specify % for all pages and attachments")
+				.build();
+		
+		contentRestrictionOption = Option.builder()
+				.argName("Content restriction")
+				.required()
+				.longOpt("permission")
+				.option("p")
+				.hasArgs()
+				.desc("Content restriction: " + getEnumOptions(CloudContentRestriction.class, "getDescription"))
+				.build();
+		
 		addUserOption = Option.builder()
 				.argName("Add user")
 				.longOpt("adduser")
@@ -270,6 +307,26 @@ public class ConfluenceSpacePermission {
 		cloudJiraOptions.addOption(removeUserOption);
 		cloudJiraOptions.addOption(addGroupOption);
 		cloudJiraOptions.addOption(removeGroupOption);
+		
+		cloudContentOptions = new Options();
+		cloudContentOptions.addOption(Option.builder()
+				.argName("Cloud Confluence content restriction Mode")
+				.required()
+				.longOpt("content")
+				.option("co")
+				.desc("Cloud Confluence content restriction")
+				.build());
+		cloudContentOptions.addOption(schemeOption);
+		cloudContentOptions.addOption(hostOption);		
+		cloudContentOptions.addOption(adminOption);
+		cloudContentOptions.addOption(passwordOption);
+		cloudContentOptions.addOption(spaceKeyOption);
+		cloudContentOptions.addOption(contentKeyOption);
+		cloudContentOptions.addOption(contentRestrictionOption);
+		cloudContentOptions.addOption(addUserOption);
+		cloudContentOptions.addOption(removeUserOption);
+		cloudContentOptions.addOption(addGroupOption);
+		cloudContentOptions.addOption(removeGroupOption);
 	}
 	
 	private static void logError(boolean add, Object obj, String msg) {
@@ -560,7 +617,7 @@ public class ConfluenceSpacePermission {
 								Map<String, Object> query = new HashMap<>();
 								query.put("user", user);
 								Response resp = WebRequest.invoke(
-										scheme, host, PATH_CLOUD_PROJECT_ADD_ACTOR, pathReplacement, 
+										scheme, host, PATH_CLOUD_PROJECT_REMOVE_ACTOR, pathReplacement, 
 										HttpMethod.DELETE, admin, password, null, null, query, null);
 								if (logResult(false, remove, resp)) {
 									success++;
@@ -574,7 +631,7 @@ public class ConfluenceSpacePermission {
 								Map<String, Object> query = new HashMap<>();
 								query.put("groupId", group);
 								Response resp = WebRequest.invoke(
-										scheme, host, PATH_CLOUD_PROJECT_ADD_ACTOR, pathReplacement, 
+										scheme, host, PATH_CLOUD_PROJECT_REMOVE_ACTOR, pathReplacement, 
 										HttpMethod.DELETE, admin, password, null, null, query, null);
 								if (logResult(false, remove, resp)) {
 									success++;
@@ -819,6 +876,200 @@ public class ConfluenceSpacePermission {
 		return true;
 	}
 	
+	private static boolean processCloudContent(String[] args) {
+		int total = 0;
+		int success = 0;
+		try {
+			CommandLineParser parser = new DefaultParser();
+			CommandLine cmd = parser.parse(cloudContentOptions, args, true);
+			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
+			String host = cmd.getOptionValue(hostOption);
+			String admin = cmd.getOptionValue(adminOption);
+			// Get api token
+			String password = null;
+			if (cmd.hasOption(passwordOption)) {
+				password = cmd.getOptionValue(passwordOption);
+			} else {
+				password = new String(Console.readPassword("Administrator API token: "));
+			}
+			List<CloudContentRestriction> restrictionList = new ArrayList<>();
+			String[] restrictions = cmd.getOptionValues(contentRestrictionOption);
+			for (String restriction : restrictions) {
+				CloudContentRestriction v = CloudContentRestriction.valueOf(restriction);
+				if (v != null) {
+					restrictionList.add(v);
+				} else {
+					Log.error(LOGGER, "Invalid restriction ignored: " + restriction);
+				}
+			}
+			// Convert space keys to space ids as comma-delimited list
+			String spaceIdList = null;
+			String[] spaceKeys = cmd.getOptionValues(spaceKeyOption);
+			// Get spaces
+			try {
+				Map<String, Object> query = new HashMap<>();
+				if (spaceKeys.length == 1 && ALL_SPACES.equals(spaceKeys[0])) {
+					Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
+				}
+				if (spaceKeys != null) {
+					// Get only specified spaces
+					StringBuilder sb = new StringBuilder();
+					for (String spaceKey : spaceKeys) {
+						sb.append(",").append(spaceKey);
+					}
+					if (sb.length() != 0) {
+						query.put("keys", sb.toString().substring(1));
+					}
+				}
+				List<SpaceObject> spaceObjects = WebRequest.fetchObjectsWithCursor(
+						scheme, host, PATH_CLOUD_GET_SPACES, null, 
+						HttpMethod.GET, admin, password, null, null, query, null, SpaceObjects.class);
+				StringBuilder sb = new StringBuilder();
+				for (SpaceObject so : spaceObjects) {
+					sb.append(",").append(so.getId());
+					Log.info(LOGGER, "Space found: " + so.getKey() + " = " + so.getId());
+				}
+				if (sb.length() != 0) {
+					spaceIdList = sb.toString().substring(1);
+				} else {
+					Log.error(LOGGER, "No specified space(s) can be found");
+					return true;
+				}
+			} catch (Exception ex) {
+				Log.error(LOGGER, "Failed to retrieve space list", ex);
+				return true;
+			}
+			List<String> contentList = new ArrayList<>();
+			String[] contentIds = cmd.getOptionValues(contentKeyOption);
+			if (contentIds.length == 1 && ALL_SPACES.equals(contentIds[0])) {
+				// Get all pages
+				Map<String, Object> query = new HashMap<>();
+				if (spaceIdList != null) {
+					// Restrict to specific spaces
+					query.put("space-id", spaceIdList);
+				}
+				try {
+					List<Page> pages = WebRequest.fetchObjectsWithCursor(
+						scheme, host, PATH_CLOUD_GET_PAGES, null, 
+						HttpMethod.GET, admin, password, null, null, query, null, Pages.class);
+					for (Page page : pages) {
+						Log.info(LOGGER, "Page found: " + page.getTitle() + " = " + page.getId());
+						contentList.add(page.getId());
+					}
+				} catch (Exception ex) {
+					Log.error(LOGGER, "Unable to retrieve page list", ex);
+				}
+			} else {
+				for (String contentId : contentIds) {
+					contentList.add(contentId);
+				}
+			}
+			String[] addUsers = cmd.getOptionValues(addUserOption);
+			String[] removeUsers = cmd.getOptionValues(removeUserOption);
+			String[] addGroups = cmd.getOptionValues(addGroupOption);
+			String[] removeGroups = cmd.getOptionValues(removeGroupOption);
+			for (String contentId : contentList) {
+				if (addUsers != null) {
+					for (String addUser: addUsers) { 
+						for (CloudContentRestriction restriction : restrictionList) {
+							total++;
+							AddRestriction data = new AddRestriction(contentId, restriction.name(), true, addUser);
+							try {
+								Map<String, String> replacements = new HashMap<>();
+								replacements.put("id", contentId);
+								replacements.put("operationKey", restriction.name());
+								Map<String, Object> query = new HashMap<>();
+								query.put("accountId", addUser);
+								Response resp = WebRequest.invoke(
+										scheme, host, PATH_CLOUD_RESTRICTION_ADD_USER, replacements, 
+										HttpMethod.PUT, admin, password, null, null, query, null);
+								if (logResult(true, data, resp)) {
+									success++;
+								}
+							} catch (Exception ex) {
+								logError(true, data, ex.getMessage());
+							}
+						}
+					}
+				}
+				if (addGroups != null) {
+					for (String addGroup : addGroups) { 
+						for (CloudContentRestriction restriction : restrictionList) {
+							total++;
+							AddRestriction data = new AddRestriction(contentId, restriction.name(), false, addGroup);
+							try {
+								Map<String, String> replacements = new HashMap<>();
+								replacements.put("id", contentId);
+								replacements.put("operationKey", restriction.name());
+								replacements.put("groupId", addGroup);
+								Response resp = WebRequest.invoke(
+										scheme, host, PATH_CLOUD_RESTRICTION_ADD_GROUP, replacements, 
+										HttpMethod.PUT, admin, password, null, null, null, null);
+								if (logResult(true, data, resp)) {
+									success++;
+								}
+							} catch (Exception ex) {
+								logError(true, data, ex.getMessage());
+							}
+						}
+					}
+				}
+				if (removeUsers != null) {
+					for (String removeUser: removeUsers) { 
+						for (CloudContentRestriction restriction : restrictionList) {
+							total++;
+							AddRestriction data = new AddRestriction(contentId, restriction.name(), true, removeUser);
+							try {
+								Map<String, String> replacements = new HashMap<>();
+								replacements.put("id", contentId);
+								replacements.put("operationKey", restriction.name());
+								Map<String, Object> query = new HashMap<>();
+								query.put("accountId", removeUser);
+								Response resp = WebRequest.invoke(
+										scheme, host, PATH_CLOUD_RESTRICTION_REMOVE_USER, replacements, 
+										HttpMethod.DELETE, admin, password, null, null, query, null);
+								if (logResult(false, data, resp)) {
+									success++;
+								}
+							} catch (Exception ex) {
+								logError(false, data, ex.getMessage());
+							}
+						}
+					}
+				}
+				if (removeGroups != null) {
+					for (String removeGroup : removeGroups) { 
+						for (CloudContentRestriction restriction : restrictionList) {
+							total++;
+							AddRestriction data = new AddRestriction(contentId, restriction.name(), false, removeGroup);
+							try {
+								Map<String, String> replacements = new HashMap<>();
+								replacements.put("id", contentId);
+								replacements.put("operationKey", restriction.name());
+								replacements.put("groupId", removeGroup);
+								Response resp = WebRequest.invoke(
+										scheme, host, PATH_CLOUD_RESTRICTION_REMOVE_GROUP, replacements, 
+										HttpMethod.DELETE, admin, password, null, null, null, null);
+								if (logResult(false, data, resp)) {
+									success++;
+								}
+							} catch (Exception ex) {
+								logError(false, data, ex.getMessage());
+							}
+						}
+					}
+				}
+			}
+		} catch (ParseException pex) {
+			// Ignore
+			return false;
+		} catch (IOException ioex) {
+			Log.error(LOGGER, "Unable to read password", ioex);
+		}
+		Log.info(LOGGER, "Success/total: " + success + "/" + total);
+		return true;
+	}
+	
 	public static void main(String[] args) {
 		if (processDataCenter(args)) {
 			return;
@@ -829,9 +1080,16 @@ public class ConfluenceSpacePermission {
 		if (processCloudJira(args)) {
 			return;
 		}
+		if (processCloudContent(args)) {
+			return;
+		}
 		HelpFormatter hf = new HelpFormatter();
 		hf.printHelp("Manage space permission for Confluence Data Center/Server", dcOptions);
+		System.out.println("============================================================");
 		hf.printHelp("Manage space permission for Confluence Cloud", cloudConfluenceOptions);
+		System.out.println("============================================================");
+		hf.printHelp("Manage content restriction for Confluence Cloud", cloudContentOptions);
+		System.out.println("============================================================");
 		hf.printHelp("Manage project permission for Jira Cloud", cloudJiraOptions);
 	}
 }

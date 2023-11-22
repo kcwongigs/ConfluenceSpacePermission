@@ -28,6 +28,7 @@ import org.apache.http.HttpStatus;
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.glassfish.jersey.client.ClientProperties;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -144,6 +145,7 @@ public class WebRequest {
 			Log.debug(LOGGER, "Modified Path: " + modifiedPath);
 		}
 		Client client = ClientBuilder.newClient();
+		client.property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true);	// To allow PUT without body
 		client.register(JACKSON_JSON_PROVIDER);
 		URI uri = new URIBuilder()
 				.setScheme(scheme)
