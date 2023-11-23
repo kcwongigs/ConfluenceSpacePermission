@@ -1,18 +1,18 @@
 package com.igsl.model;
 
 public class Restriction {
-	private RestrictionGroup group;
-	private RestrictionUser user;
-	public RestrictionGroup getGroup() {
+	private RestrictionGroups group;
+	private RestrictionUsers user;
+	public RestrictionGroups getGroup() {
 		return group;
 	}
-	public void setGroup(RestrictionGroup group) {
+	public void setGroup(RestrictionGroups group) {
 		this.group = group;
 	}
-	public RestrictionUser getUser() {
+	public RestrictionUsers getUser() {
 		return user;
 	}
-	public void setUser(RestrictionUser user) {
+	public void setUser(RestrictionUsers user) {
 		this.user = user;
 	}
 }

@@ -26,8 +26,8 @@ import org.apache.logging.log4j.Logger;
 import com.igsl.model.AddPermission;
 import com.igsl.model.AddProjectRoleActor;
 import com.igsl.model.AddRestriction;
-import com.igsl.model.Attachment;
-import com.igsl.model.Attachments;
+import com.igsl.model.ContentRestriction;
+import com.igsl.model.ContentRestrictions;
 import com.igsl.model.DCDataObject;
 import com.igsl.model.GetPermission;
 import com.igsl.model.GetPermissions;
@@ -66,7 +66,6 @@ public class PermissionTool {
 	private static final String PATH_CLOUD_PROJECT_REMOVE_ACTOR = "/rest/api/2/project/{projectIdOrKey}/role/{id}";	// DELETE
 	
 	private static final String PATH_CLOUD_GET_PAGES = "/wiki/api/v2/pages";	// GET
-	private static final String PATH_CLOUD_GET_ATTACHMENTS = "/wiki/api/v2/attachments";	// GET
 	private static final String PATH_CLOUD_RESTRICTION_ADD_GROUP = 
 			"/wiki/rest/api/content/{id}/restriction/byOperation/{operationKey}/byGroupId/{groupId}";	// PUT
 	private static final String PATH_CLOUD_RESTRICTION_REMOVE_GROUP = 
@@ -75,6 +74,8 @@ public class PermissionTool {
 			"/wiki/rest/api/content/{id}/restriction/byOperation/{operationKey}/user";	// PUT
 	private static final String PATH_CLOUD_RESTRICTION_REMOVE_USER = 
 			"/wiki/rest/api/content/{id}/restriction/byOperation/{operationKey}/user";	// DELETE
+	private static final String PATH_CLOUD_GET_RESTRICTION = 
+			"/wiki/rest/api/content/{id}/restriction";	// GET
 	
 	@SuppressWarnings("rawtypes")
 	public static <T extends Enum> String getEnumOptions(Class<T> enumClass, String descriptionMethod) {
@@ -331,6 +332,10 @@ public class PermissionTool {
 	
 	private static void logError(boolean add, Object obj, String msg) {
 		Log.error(LOGGER, ((add)? "Failed to add " : "Failed to remove ") + obj.toString() + ": " + msg);
+	}
+	
+	private static void logSkip(boolean add, Object obj, String msg) {
+		Log.error(LOGGER, "Skipped " + ((add)? "adding " : "removing ") + obj.toString() + ": " + msg);
 	}
 	
 	private static boolean logResult(boolean add, Object obj, Response resp) {
@@ -886,6 +891,11 @@ public class PermissionTool {
 		return true;
 	}
 	
+	/**
+	 * Note: Implementation is not complete. 
+	 * Anonymous and known users (I assume is space owner) are not supported.
+	 * Will do nothing if no restrictions exist in the first place.
+	 */
 	private static boolean processCloudContent(String[] args) {
 		int total = 0;
 		int success = 0;
@@ -979,6 +989,75 @@ public class PermissionTool {
 			String[] addGroups = cmd.getOptionValues(addGroupOption);
 			String[] removeGroups = cmd.getOptionValues(removeGroupOption);
 			for (String contentId : contentList) {
+				// Check if there is any restriction
+				try {
+					Map<String, String> replacements = new HashMap<>();
+					replacements.put("id", contentId);
+					Response resp = WebRequest.invoke(
+							scheme, host, PATH_CLOUD_GET_RESTRICTION, replacements, 
+							HttpMethod.GET, admin, password, null, null, null, null);
+					if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+						ContentRestrictions contentRestrictions = resp.readEntity(ContentRestrictions.class);
+						int targetCount = 0;
+						for (ContentRestriction contentRestriction : contentRestrictions.getResults()) {
+							targetCount += contentRestriction.getRestrictions().getGroup().getResults().size();
+							targetCount += contentRestriction.getRestrictions().getUser().getResults().size();							
+						}
+						if (targetCount == 0) {
+							// Nothing defined
+							// Skip the actions, print message and count them as success
+							if (addUsers != null) {
+								for (String addUser: addUsers) { 
+									for (CloudContentRestriction restriction : restrictionList) {
+										total++;
+										success++;
+										AddRestriction data = new AddRestriction(
+												contentId, restriction.name(), true, addUser);
+										logSkip(true, data, "Content is not restricted");
+									}
+								}
+							}
+							if (addGroups != null) {
+								for (String addGroup: addGroups) { 
+									for (CloudContentRestriction restriction : restrictionList) {
+										total++;
+										success++;
+										AddRestriction data = new AddRestriction(
+												contentId, restriction.name(), false, addGroup);
+										logSkip(true, data, "Content is not restricted");
+									}
+								}
+							}
+							if (removeUsers != null) {
+								for (String removeUser: removeUsers) { 
+									for (CloudContentRestriction restriction : restrictionList) {
+										total++;
+										success++;
+										AddRestriction data = new AddRestriction(
+												contentId, restriction.name(), true, removeUser);
+										logSkip(false, data, "Content is not restricted");
+									}
+								}
+							}
+							if (removeGroups != null) {
+								for (String removeGroup: removeGroups) { 
+									for (CloudContentRestriction restriction : restrictionList) {
+										total++;
+										success++;
+										AddRestriction data = new AddRestriction(
+												contentId, restriction.name(), false, removeGroup);
+										logSkip(false, data, "Content is not restricted");
+									}
+								}
+							}
+							continue;	// Skip this content ID
+						}
+					} else {
+						Log.error(LOGGER, "Failed to check content restriction", resp.readEntity(String.class));
+					}
+				} catch (Exception ex) {
+					Log.error(LOGGER, "Failed to check content restriction", ex);
+				}
 				if (addUsers != null) {
 					for (String addUser: addUsers) { 
 						for (CloudContentRestriction restriction : restrictionList) {
