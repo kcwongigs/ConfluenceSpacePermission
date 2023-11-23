@@ -670,202 +670,212 @@ public class PermissionTool {
 				password = new String(Console.readPassword("Administrator API token: "));
 			}
 			String[] spaceKeys = cmd.getOptionValues(spaceKeyOption);
+			// Get related spaces
+			Map<String, String> spaceKeysToSpaceId = new HashMap<>();
+			Map<String, Object> query = new HashMap<>();
 			if (spaceKeys != null) {
-				// Get all spaces
-				Map<String, String> spaceKeysToSpaceId = new HashMap<>();
-				try {
-					Map<String, Object> query = new HashMap<>();
-					List<SpaceObject> spaceObjects = WebRequest.fetchObjectsWithCursor(
-							scheme, host, PATH_CLOUD_GET_SPACES, null, 
-							HttpMethod.GET, admin, password, null, null, query, null, SpaceObjects.class);
-					for (SpaceObject so : spaceObjects) {
-						spaceKeysToSpaceId.put(so.getKey(), so.getId());
-					}
-				} catch (Exception ex) {
-					Log.error(LOGGER, "Failed to retrieve space list", ex);
-					return true;
-				}
-				if (spaceKeys.length == 1 && ALL_SPACES.equals(spaceKeys[0])) {
-					Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
-					for (Map.Entry<String, String> entry : spaceKeysToSpaceId.entrySet()) {
-						Log.info(LOGGER, "Space found: " + entry.getKey() + " = " + entry.getValue());
-					}
-					spaceKeys = spaceKeysToSpaceId.keySet().toArray(new String[0]);
-				}
-				List<CloudSpacePermission> permissionList = new ArrayList<>();
-				String[] permissions = cmd.getOptionValues(dcPermissionOption);
-				for (String permission : permissions) {
-					try {
-						CloudSpacePermission parsed = CloudSpacePermission.valueOf(permission);
-						permissionList.add(parsed);
-					} catch (Exception ex) {
-						Log.error(LOGGER, "Invalid permission ignored: " + permission);
-					}
-				}
-				String[] addUsers = cmd.getOptionValues(addUserOption);
-				String[] removeUsers = cmd.getOptionValues(removeUserOption);
-				String[] addGroups = cmd.getOptionValues(addGroupOption);
-				String[] removeGroups = cmd.getOptionValues(removeGroupOption);
-				// For each space
+				// Get only specified spaces
+				StringBuilder sb = new StringBuilder();
 				for (String spaceKey : spaceKeys) {
-					List<GetPermission> permissionObjectList = new ArrayList<>();
-					if (removeUsers != null || removeGroups != null) {
-						Map<String, String> pathMap = new HashMap<>();
+					sb.append(",").append(spaceKey);
+				}
+				if (sb.length() != 0) {
+					query.put("keys", sb.toString().substring(1));
+				}
+			}
+			try {
+				List<SpaceObject> spaceObjects = WebRequest.fetchObjectsWithCursor(
+						scheme, host, PATH_CLOUD_GET_SPACES, null, 
+						HttpMethod.GET, admin, password, null, null, query, null, SpaceObjects.class);
+				for (SpaceObject so : spaceObjects) {
+					spaceKeysToSpaceId.put(so.getKey(), so.getId());
+				}
+			} catch (Exception ex) {
+				Log.error(LOGGER, "Failed to retrieve space list", ex);
+				return true;
+			}
+			if (spaceKeys.length == 1 && ALL_SPACES.equals(spaceKeys[0])) {
+				Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
+				for (Map.Entry<String, String> entry : spaceKeysToSpaceId.entrySet()) {
+					Log.info(LOGGER, "Space found: " + entry.getKey() + " = " + entry.getValue());
+				}
+				spaceKeys = spaceKeysToSpaceId.keySet().toArray(new String[0]);
+			}
+			List<CloudSpacePermission> permissionList = new ArrayList<>();
+			String[] permissions = cmd.getOptionValues(dcPermissionOption);
+			for (String permission : permissions) {
+				try {
+					CloudSpacePermission parsed = CloudSpacePermission.valueOf(permission);
+					permissionList.add(parsed);
+				} catch (Exception ex) {
+					Log.error(LOGGER, "Invalid permission ignored: " + permission);
+				}
+			}
+			String[] addUsers = cmd.getOptionValues(addUserOption);
+			String[] removeUsers = cmd.getOptionValues(removeUserOption);
+			String[] addGroups = cmd.getOptionValues(addGroupOption);
+			String[] removeGroups = cmd.getOptionValues(removeGroupOption);
+			// For each space
+			for (String spaceKey : spaceKeys) {
+				List<GetPermission> permissionObjectList = new ArrayList<>();
+				if (removeUsers != null || removeGroups != null) {
+					Map<String, String> pathMap = new HashMap<>();
+					if (spaceKeysToSpaceId.containsKey(spaceKey)) {
 						pathMap.put("id", spaceKeysToSpaceId.get(spaceKey));
-						try {
-							permissionObjectList = WebRequest.fetchObjectsWithCursor(
-								scheme, host, PATH_CLOUD_GET_PERMISSION_ID, pathMap, 
-								HttpMethod.GET, admin, password, null, null, null, null, GetPermissions.class);
-						} catch (Exception ex) {
-							Log.error(LOGGER, "Unable to retrieve permission list", ex);
-							continue;
+					}
+					try {
+						permissionObjectList = WebRequest.fetchObjectsWithCursor(
+							scheme, host, PATH_CLOUD_GET_PERMISSION_ID, pathMap, 
+							HttpMethod.GET, admin, password, null, null, null, null, GetPermissions.class);
+					} catch (Exception ex) {
+						Log.error(LOGGER, "Unable to retrieve permission list", ex);
+						continue;
+					}
+				}
+				// For each permission
+				for (CloudSpacePermission permission : permissionList) {
+					// For each action & target
+					if (addUsers != null) {
+						for (String addUser : addUsers) {
+							total++;
+							String data = "Target: " + addUser + 
+									" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
+									" Space: " + spaceKey;
+							AddPermission obj = new AddPermission();
+							Operation operation = new Operation();
+							operation.setKey(permission.getKey());
+							operation.setTarget(permission.getTarget());
+							obj.setOperation(operation);
+							Subject subject = new Subject();
+							subject.setIdentifier(addUser);
+							subject.setType(Subject.SUBJECT_TYPE_USER);
+							obj.setSubject(subject);
+							try {
+								Map<String, String> pathMap = new HashMap<>();
+								pathMap.put("spaceKey", spaceKey);
+								Response resp = WebRequest.invoke(
+										scheme, host, PATH_CLOUD_ADD_PERMISSION, pathMap,
+										HttpMethod.POST, admin, password, null, null, null, obj);
+								if (logResult(true, data, resp)) {
+									success++;
+								}
+							} catch (Exception ex) {
+								Log.error(LOGGER, "Error", ex);
+								logError(true, data, ex.getMessage());
+							}
 						}
 					}
-					// For each permission
-					for (CloudSpacePermission permission : permissionList) {
-						// For each action & target
-						if (addUsers != null) {
-							for (String addUser : addUsers) {
-								total++;
-								String data = "Target: " + addUser + 
-										" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
-										" Space: " + spaceKey;
-								AddPermission obj = new AddPermission();
-								Operation operation = new Operation();
-								operation.setKey(permission.getKey());
-								operation.setTarget(permission.getTarget());
-								obj.setOperation(operation);
-								Subject subject = new Subject();
-								subject.setIdentifier(addUser);
-								subject.setType(Subject.SUBJECT_TYPE_USER);
-								obj.setSubject(subject);
+					if (removeUsers != null) {
+						for (String removeUser : removeUsers) {
+							total++;
+							String data = "Target: " + removeUser + 
+									" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
+									" Space: " + spaceKey;
+							// Get the permission ids and locate a match
+							String permissionId = null;
+							for (GetPermission item : permissionObjectList) {
+//								Log.debug(LOGGER, "Found permission: " + 
+//										item.getOperation().getKey() + " -> " + item.getOperation().getTargetType() + " for " + 
+//										item.getPrincipal().getType() + ": " + item.getPrincipal().getId()
+//										);									
+								if (removeUser.equals(item.getPrincipal().getId()) && 
+									Principal.TYPE_USER.equals(item.getPrincipal().getType()) &&
+									permission.getTarget().equals(item.getOperation().getTargetType()) &&
+									permission.getKey().equals(item.getOperation().getKey())) {
+									permissionId = item.getId();
+									break;
+								}
+							}
+							if (permissionId != null) {
+								// Remove it
+								Map<String, String> removePathMap = new HashMap<>();
+								removePathMap.put("spaceKey", spaceKey);
+								removePathMap.put("id", permissionId);
 								try {
-									Map<String, String> pathMap = new HashMap<>();
-									pathMap.put("spaceKey", spaceKey);
 									Response resp = WebRequest.invoke(
-											scheme, host, PATH_CLOUD_ADD_PERMISSION, pathMap,
-											HttpMethod.POST, admin, password, null, null, null, obj);
-									if (logResult(true, data, resp)) {
+											scheme, host, PATH_CLOUD_REMOVE_PERMISSION, removePathMap, 
+											HttpMethod.DELETE, admin, password, null, null, null, null);
+									if (logResult(false, data, resp)) {
 										success++;
 									}
 								} catch (Exception ex) {
-									Log.error(LOGGER, "Error", ex);
-									logError(true, data, ex.getMessage());
+									logError(false, data, ex.getMessage());
 								}
+							} else {
+								logError(false, data, "Permission not found");
 							}
 						}
-						if (removeUsers != null) {
-							for (String removeUser : removeUsers) {
-								total++;
-								String data = "Target: " + removeUser + 
-										" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
-										" Space: " + spaceKey;
-								// Get the permission ids and locate a match
-								String permissionId = null;
-								for (GetPermission item : permissionObjectList) {
-	//								Log.debug(LOGGER, "Found permission: " + 
-	//										item.getOperation().getKey() + " -> " + item.getOperation().getTargetType() + " for " + 
-	//										item.getPrincipal().getType() + ": " + item.getPrincipal().getId()
-	//										);									
-									if (removeUser.equals(item.getPrincipal().getId()) && 
-										Principal.TYPE_USER.equals(item.getPrincipal().getType()) &&
-										permission.getTarget().equals(item.getOperation().getTargetType()) &&
-										permission.getKey().equals(item.getOperation().getKey())) {
-										permissionId = item.getId();
-										break;
-									}
+					}
+					if (addGroups != null) {
+						for (String addGroup : addGroups) {
+							total++;
+							String data = "Target: " + addGroup + 
+									" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
+									" Space: " + spaceKey;
+							AddPermission obj = new AddPermission();
+							Operation operation = new Operation();
+							operation.setKey(permission.getKey());
+							operation.setTarget(permission.getTarget());
+							obj.setOperation(operation);
+							Subject subject = new Subject();
+							subject.setIdentifier(addGroup);
+							subject.setType(Subject.SUBJECT_TYPE_GROUP);
+							obj.setSubject(subject);
+							try {
+								Map<String, String> pathMap = new HashMap<>();
+								pathMap.put("spaceKey", spaceKey);
+								Response resp = WebRequest.invoke(
+										scheme, host, PATH_CLOUD_ADD_PERMISSION, pathMap,
+										HttpMethod.POST, admin, password, null, null, null, obj);
+								if (logResult(true, data, resp)) {
+									success++;
 								}
-								if (permissionId != null) {
-									// Remove it
-									Map<String, String> removePathMap = new HashMap<>();
-									removePathMap.put("spaceKey", spaceKey);
-									removePathMap.put("id", permissionId);
-									try {
-										Response resp = WebRequest.invoke(
-												scheme, host, PATH_CLOUD_REMOVE_PERMISSION, removePathMap, 
-												HttpMethod.DELETE, admin, password, null, null, null, null);
-										if (logResult(false, data, resp)) {
-											success++;
-										}
-									} catch (Exception ex) {
-										logError(false, data, ex.getMessage());
-									}
-								} else {
-									logError(false, data, "Permission not found");
-								}
+							} catch (Exception ex) {
+								Log.error(LOGGER, "Error", ex);
+								logError(true, data, ex.getMessage());
 							}
 						}
-						if (addGroups != null) {
-							for (String addGroup : addGroups) {
-								total++;
-								String data = "Target: " + addGroup + 
-										" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
-										" Space: " + spaceKey;
-								AddPermission obj = new AddPermission();
-								Operation operation = new Operation();
-								operation.setKey(permission.getKey());
-								operation.setTarget(permission.getTarget());
-								obj.setOperation(operation);
-								Subject subject = new Subject();
-								subject.setIdentifier(addGroup);
-								subject.setType(Subject.SUBJECT_TYPE_GROUP);
-								obj.setSubject(subject);
+					}
+					if (removeGroups != null) {
+						for (String removeGroup : removeGroups) {
+							total++;
+							String data = "Target: " + removeGroup + 
+									" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
+									" Space: " + spaceKey;
+							// Get the permission ids and locate a match
+							String permissionId = null;
+							for (GetPermission item : permissionObjectList) {
+								if (removeGroup.equals(item.getPrincipal().getId()) && 
+									Principal.TYPE_GROUP.equals(item.getPrincipal().getType()) &&
+									permission.getTarget().equals(item.getOperation().getTargetType()) &&
+									permission.getKey().equals(item.getOperation().getKey())) {
+									permissionId = item.getId();
+									break;
+								}
+							}
+							if (permissionId != null) {
+								// Remove it
+								Map<String, String> removePathMap = new HashMap<>();
+								removePathMap.put("spaceKey", spaceKey);
+								removePathMap.put("id", permissionId);
 								try {
-									Map<String, String> pathMap = new HashMap<>();
-									pathMap.put("spaceKey", spaceKey);
 									Response resp = WebRequest.invoke(
-											scheme, host, PATH_CLOUD_ADD_PERMISSION, pathMap,
-											HttpMethod.POST, admin, password, null, null, null, obj);
-									if (logResult(true, data, resp)) {
+											scheme, host, PATH_CLOUD_REMOVE_PERMISSION, removePathMap, 
+											HttpMethod.DELETE, admin, password, null, null, null, null);
+									if (logResult(false, data, resp)) {
 										success++;
 									}
 								} catch (Exception ex) {
-									Log.error(LOGGER, "Error", ex);
-									logError(true, data, ex.getMessage());
+									logError(false, data, ex.getMessage());
 								}
+							} else {
+								logError(false, data, "Permission not found");
 							}
-						}
-						if (removeGroups != null) {
-							for (String removeGroup : removeGroups) {
-								total++;
-								String data = "Target: " + removeGroup + 
-										" Permission: " + permission.getTarget() + ":" + permission.getKey() + 
-										" Space: " + spaceKey;
-								// Get the permission ids and locate a match
-								String permissionId = null;
-								for (GetPermission item : permissionObjectList) {
-									if (removeGroup.equals(item.getPrincipal().getId()) && 
-										Principal.TYPE_GROUP.equals(item.getPrincipal().getType()) &&
-										permission.getTarget().equals(item.getOperation().getTargetType()) &&
-										permission.getKey().equals(item.getOperation().getKey())) {
-										permissionId = item.getId();
-										break;
-									}
-								}
-								if (permissionId != null) {
-									// Remove it
-									Map<String, String> removePathMap = new HashMap<>();
-									removePathMap.put("spaceKey", spaceKey);
-									removePathMap.put("id", permissionId);
-									try {
-										Response resp = WebRequest.invoke(
-												scheme, host, PATH_CLOUD_REMOVE_PERMISSION, removePathMap, 
-												HttpMethod.DELETE, admin, password, null, null, null, null);
-										if (logResult(false, data, resp)) {
-											success++;
-										}
-									} catch (Exception ex) {
-										logError(false, data, ex.getMessage());
-									}
-								} else {
-									logError(false, data, "Permission not found");
-								}
-							}	
-						}
-						// for each action & target
-					}	// for each permission
-				}	// For each space key
-			} // If space key specified
+						}	
+					}
+					// for each action & target
+				}	// for each permission
+			}	// For each space key
 		} catch (ParseException pex) {
 			// Ignore
 			return false;

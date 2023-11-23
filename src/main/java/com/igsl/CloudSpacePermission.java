@@ -32,6 +32,7 @@ public enum CloudSpacePermission {
 	 * attachment, 
 	 * space
 	 */
+	administer("administer", "space", "Administer space"),
 	readspace("read", "space", "Read space"),
 	createpage("create", "page", "Create or update page");
 	private String description;
