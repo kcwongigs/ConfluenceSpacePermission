@@ -49,7 +49,7 @@ public class PermissionTool {
 	private static final Logger LOGGER = LogManager.getLogger(PermissionTool.class);
 	
 	private static final String DEFAULT_SCHEME = "https";
-	private static final String ALL_SPACES = "%";
+	private static final String WILDCARD = "%";
 	
 	private static final String PATH_DC_ADD_SPACE_PERMISSION = "/rpc/json-rpc/confluenceservice-v2/addPermissionToSpace";
 	private static final String PATH_DC_REMOVE_SPACE_PERMISSION = "/rpc/json-rpc/confluenceservice-v2/removePermissionFromSpace";
@@ -371,7 +371,7 @@ public class PermissionTool {
 				password = new String(Console.readPassword("Administrator API token: "));
 			}
 			String[] spaceKeys = cmd.getOptionValues(spaceKeyOption);
-			if (spaceKeys.length == 1 && ALL_SPACES.equals(spaceKeys[0])) {
+			if (spaceKeys.length == 1 && WILDCARD.equals(spaceKeys[0])) {
 				Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
 				// Get all spaces
 				try {
@@ -513,7 +513,7 @@ public class PermissionTool {
 				password = new String(Console.readPassword("Administrator API token: "));
 			}
 			String[] projectKeys = cmd.getOptionValues(projectKeyOption);
-			if (projectKeys.length == 1 && ALL_SPACES.equals(projectKeys[0])) {
+			if (projectKeys.length == 1 && WILDCARD.equals(projectKeys[0])) {
 				Log.info(LOGGER, "Wildcard project found, all projects will be processed");
 				// Get all projects
 				try {
@@ -678,7 +678,7 @@ public class PermissionTool {
 			// Get related spaces
 			Map<String, String> spaceKeysToSpaceId = new HashMap<>();
 			Map<String, Object> query = new HashMap<>();
-			if (spaceKeys != null) {
+			if (spaceKeys != null && !(spaceKeys.length == 1 && WILDCARD.equals(spaceKeys[0]))) {
 				// Get only specified spaces
 				StringBuilder sb = new StringBuilder();
 				for (String spaceKey : spaceKeys) {
@@ -699,7 +699,7 @@ public class PermissionTool {
 				Log.error(LOGGER, "Failed to retrieve space list", ex);
 				return true;
 			}
-			if (spaceKeys.length == 1 && ALL_SPACES.equals(spaceKeys[0])) {
+			if (spaceKeys.length == 1 && WILDCARD.equals(spaceKeys[0])) {
 				Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
 				for (Map.Entry<String, String> entry : spaceKeysToSpaceId.entrySet()) {
 					Log.info(LOGGER, "Space found: " + entry.getKey() + " = " + entry.getValue());
@@ -928,10 +928,10 @@ public class PermissionTool {
 			// Get spaces
 			try {
 				Map<String, Object> query = new HashMap<>();
-				if (spaceKeys.length == 1 && ALL_SPACES.equals(spaceKeys[0])) {
+				if (spaceKeys.length == 1 && WILDCARD.equals(spaceKeys[0])) {
 					Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
 				}
-				if (spaceKeys != null) {
+				if (spaceKeys != null && !(spaceKeys.length == 1 && WILDCARD.equals(spaceKeys[0]))) {
 					// Get only specified spaces
 					StringBuilder sb = new StringBuilder();
 					for (String spaceKey : spaceKeys) {
@@ -961,7 +961,7 @@ public class PermissionTool {
 			}
 			List<String> contentList = new ArrayList<>();
 			String[] contentIds = cmd.getOptionValues(contentKeyOption);
-			if (contentIds.length == 1 && ALL_SPACES.equals(contentIds[0])) {
+			if (contentIds.length == 1 && WILDCARD.equals(contentIds[0])) {
 				// Get all pages
 				Map<String, Object> query = new HashMap<>();
 				if (spaceIdList != null) {
