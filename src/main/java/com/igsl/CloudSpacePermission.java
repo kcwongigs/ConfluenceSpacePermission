@@ -33,6 +33,7 @@ public enum CloudSpacePermission {
 	 * space
 	 */
 	administer("administer", "space", "Administer space"),
+	restrict_content("restrict_content", "space", "Modify page restrictions"),
 	readspace("read", "space", "Read space"),
 	createpage("create", "page", "Create or update page");
 	private String description;

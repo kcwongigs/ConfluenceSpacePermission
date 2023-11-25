@@ -48,6 +48,8 @@ public class WebRequest {
 			.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 			.configure(SerializationFeature.INDENT_OUTPUT, true);
 	
+	private static RateLimiter limiter = new RateLimiter(100, 1000);
+	
 	public static <T> List<T> fetchObjectsWithStartAt(
 			String scheme,
 			String host,
@@ -138,11 +140,11 @@ public class WebRequest {
 			) throws UnsupportedEncodingException, URISyntaxException {
 		String modifiedPath = path;
 		if (pathParameters != null) {
-			Log.debug(LOGGER, "Original Path: " + path);
+//			Log.debug(LOGGER, "Original Path: " + path);
 			for (Map.Entry<String, String> entry : pathParameters.entrySet()) {
 				modifiedPath = modifiedPath.replaceAll(Pattern.quote("{" + entry.getKey() + "}"), entry.getValue());
 			}
-			Log.debug(LOGGER, "Modified Path: " + modifiedPath);
+//			Log.debug(LOGGER, "Modified Path: " + modifiedPath);
 		}
 		Client client = ClientBuilder.newClient();
 		client.property(ClientProperties.SUPPRESS_HTTP_COMPLIANCE_VALIDATION, true);	// To allow PUT without body
@@ -176,6 +178,16 @@ public class WebRequest {
 				builder = builder.cookie(cookie);
 			}
 		}
+		
+		// Check rate
+		while (!limiter.canProceed()) {
+			try {
+				Thread.sleep(100);
+			} catch (InterruptedException iex) {
+				// Ignored
+			}
+		}
+		
 		Response response = null;
 		switch (method) {
 		case HttpMethod.DELETE:
