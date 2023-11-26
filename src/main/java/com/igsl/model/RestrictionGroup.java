@@ -3,6 +3,7 @@ package com.igsl.model;
 public class RestrictionGroup {
 	private String type = "group";
 	private String id;
+	private String name;
 	public String getType() {
 		return type;
 	}
@@ -14,5 +15,11 @@ public class RestrictionGroup {
 	}
 	public void setId(String id) {
 		this.id = id;
+	}
+	public String getName() {
+		return name;
+	}
+	public void setName(String name) {
+		this.name = name;
 	}
 }

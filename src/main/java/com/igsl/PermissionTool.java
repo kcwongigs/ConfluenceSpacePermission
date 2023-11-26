@@ -1,9 +1,14 @@
 package com.igsl;
 
+import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +24,7 @@ import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
+import org.apache.commons.csv.CSVPrinter;
 import org.apache.http.HttpStatus;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -48,6 +54,8 @@ import com.igsl.model.Principal;
 import com.igsl.model.Project;
 import com.igsl.model.ProjectRole;
 import com.igsl.model.Projects;
+import com.igsl.model.RestrictionGroup;
+import com.igsl.model.RestrictionUser;
 import com.igsl.model.SpaceObject;
 import com.igsl.model.SpaceObjects;
 import com.igsl.model.Subject;
@@ -57,6 +65,8 @@ import com.igsl.model.Subject;
  */
 public class PermissionTool {	
 	private static final Logger LOGGER = LogManager.getLogger(PermissionTool.class);
+	
+	private static final SimpleDateFormat SDF = new SimpleDateFormat("yyyyMMdd-HHmmss");
 	
 	private static final String DEFAULT_SCHEME = "https";
 	private static final String WILDCARD = "%";
@@ -90,6 +100,8 @@ public class PermissionTool {
 	private static final String PATH_DC_GET_CONTENT = "/rest/api/content";	// GET
 	private static final String PATH_DC_GET_RESTRICTION = "/rest/experimental/content/{id}/restriction";	// GET
 	private static final String PATH_DC_SET_RESTRICTION = "/rest/experimental/content/{id}/restriction";	// PUT
+
+	private static final String PATH_CLOUD_GET_PAGE_BY_ID = "/wiki/api/v2/pages/{id}";	// GET
 	
 	@SuppressWarnings("rawtypes")
 	public static <T extends Enum> String getEnumOptions(Class<T> enumClass, String descriptionMethod) {
@@ -119,6 +131,7 @@ public class PermissionTool {
 	private static Options cloudConfluenceOptions;
 	private static Options cloudJiraOptions;
 	private static Options cloudContentOptions;
+	private static Options cloudContentListOptions;
 	
 	private static Option addUserOption;
 	private static Option removeUserOption;
@@ -374,6 +387,21 @@ public class PermissionTool {
 		cloudContentOptions.addOption(removeUserOption);
 		cloudContentOptions.addOption(addGroupOption);
 		cloudContentOptions.addOption(removeGroupOption);
+		
+		cloudContentListOptions = new Options();
+		cloudContentListOptions.addOption(Option.builder()
+				.argName("Cloud Confluence content restriction list Mode")
+				.required()
+				.longOpt("contentlist")
+				.option("cl")
+				.desc("Cloud Confluence content restriction list")
+				.build());
+		cloudContentListOptions.addOption(schemeOption);
+		cloudContentListOptions.addOption(hostOption);		
+		cloudContentListOptions.addOption(adminOption);
+		cloudContentListOptions.addOption(passwordOption);
+		cloudContentListOptions.addOption(spaceKeyOption);
+		cloudContentListOptions.addOption(contentKeyOption);
 	}
 	
 	private static void logError(boolean add, Object obj, String msg) {
@@ -1457,6 +1485,194 @@ public class PermissionTool {
 		return true;
 	}
 	
+	private static boolean processCloudContentList(String[] args) {
+		try {
+			CommandLineParser parser = new DefaultParser();
+			CommandLine cmd = parser.parse(cloudContentListOptions, args, true);
+			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
+			String host = cmd.getOptionValue(hostOption);
+			String admin = cmd.getOptionValue(adminOption);
+			// Get api token
+			String password = null;
+			if (cmd.hasOption(passwordOption)) {
+				password = cmd.getOptionValue(passwordOption);
+			} else {
+				password = new String(Console.readPassword("Administrator API token: "));
+			}
+			// Convert space keys to space id = space key mapping
+			Map<String, String> spaceIdToKeyMap = new HashMap<>();
+			String[] spaceKeys = cmd.getOptionValues(spaceKeyOption);
+			// Get spaces
+			try {
+				Map<String, Object> query = new HashMap<>();
+				if (spaceKeys.length == 1 && WILDCARD.equals(spaceKeys[0])) {
+					Log.info(LOGGER, "Wildcard space found, all spaces will be processed");
+				}
+				if (spaceKeys != null && !(spaceKeys.length == 1 && WILDCARD.equals(spaceKeys[0]))) {
+					// Get only specified spaces
+					StringBuilder sb = new StringBuilder();
+					for (String spaceKey : spaceKeys) {
+						sb.append(",").append(spaceKey);
+					}
+					if (sb.length() != 0) {
+						query.put("keys", sb.toString().substring(1));
+					}
+				}
+				List<SpaceObject> spaceObjects = WebRequest.fetchObjectsWithCursor(
+						scheme, host, PATH_CLOUD_GET_SPACES, null, 
+						HttpMethod.GET, admin, password, null, null, query, null, SpaceObjects.class);
+				for (SpaceObject so : spaceObjects) {
+					spaceIdToKeyMap.put(so.getId(), so.getKey());
+					Log.info(LOGGER, "Space found: " + so.getKey() + " = " + so.getId());
+				}
+				if (spaceIdToKeyMap.size() == 0) {
+					Log.error(LOGGER, "No specified space(s) can be found");
+					return true;
+				}
+			} catch (Exception ex) {
+				Log.error(LOGGER, "Failed to retrieve space list", ex);
+				return true;
+			}
+			// Content ID to space ID map
+			Map<Page, String> contentMap = new HashMap<>();
+			String[] contentIds = cmd.getOptionValues(contentKeyOption);
+			if (contentIds.length == 1 && WILDCARD.equals(contentIds[0])) {
+				// Get all pages, one space at a time
+				for (Map.Entry<String, String> space : spaceIdToKeyMap.entrySet()) {
+					Map<String, Object> query = new HashMap<>();
+					query.put("space-id", space.getKey());
+					try {
+						List<Page> pages = WebRequest.fetchObjectsWithCursor(
+							scheme, host, PATH_CLOUD_GET_PAGES, null, 
+							HttpMethod.GET, admin, password, null, null, query, null, Pages.class);
+						for (Page page : pages) {
+							Log.info(LOGGER, 
+									"Space: " + space.getKey() + " = " + space.getValue() + 
+									" Page found: " + page.getTitle() + " = " + page.getId());
+							contentMap.put(page, space.getKey());
+						}
+					} catch (Exception ex) {
+						Log.error(LOGGER, 
+								"Unable to retrieve page list for space " + 
+								space.getKey() + " = " + space.getValue(), 
+								ex);
+					}
+				}
+			} else {
+				for (String contentId : contentIds) {
+					// Resolve content id into Page objects
+					try {
+						Map<String, String> replacements = new HashMap<>();
+						replacements.put("id", contentId);
+						Response resp = WebRequest.invoke(
+								scheme, host, PATH_CLOUD_GET_PAGE_BY_ID, replacements, 
+								HttpMethod.GET, admin, password, null, null, null, null);
+						if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+							Page page = resp.readEntity(Page.class);
+							contentMap.put(page, page.getSpaceId());
+							Log.info(LOGGER, "Page found: " + page.getTitle() + " = " + page.getId());
+						} else {
+							String msg = resp.getStatus() + ": " + resp.readEntity(String.class);
+							Log.error(LOGGER, "Failed to locate page " + contentId + ": " + msg);
+							break;
+						}
+					} catch (Exception ex) {
+						Log.error(LOGGER, "Failed to locate page " + contentId + ", page will be excluded", ex);
+					}
+				}
+			}
+			// Get page restrictions
+			Path output = Paths.get("CloudPageRestrictions." + SDF.format(new Date()) + ".csv");
+			try (	FileWriter fw = CSV.getCSVFileWriter(output); 
+					CSVPrinter printer = new CSVPrinter(fw, CSV.getCSVWriteFormat(Arrays.asList(
+							"SPACE", "SPACEID", "PAGE", "PAGEID", "OPERATION", "TYPE", "NAME", "ID", "ERROR")))) {
+				for (Map.Entry<Page, String> content : contentMap.entrySet()) {
+					String pageId = content.getKey().getId();
+					String pageTitle = content.getKey().getTitle();
+					String spaceId = content.getValue();
+					String spaceKey = spaceIdToKeyMap.get(spaceId);
+					boolean hasMore = true;
+					int startAt = 0;
+					try {
+						Map<String, String> replacements = new HashMap<>();
+						replacements.put("id", pageId);
+						while (hasMore) {
+							Map<String, Object> query = new HashMap<>();
+							query.put("start", startAt);
+							Response resp = WebRequest.invoke(scheme, host, PATH_CLOUD_GET_RESTRICTION, replacements, 
+									HttpMethod.GET, admin, password, null, null, query, null);
+							if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+								ContentRestrictions restrictions = resp.readEntity(ContentRestrictions.class);
+								int userCount = 0;
+								int groupCount = 0;
+								for (ContentRestriction restriction : restrictions.getResults()) {
+									String operation = restriction.getOperation();
+									if (restriction.getRestrictions().getUser() != null) {
+										for (RestrictionUser user : restriction.getRestrictions().getUser().getResults()) {
+											String userName = user.getDisplayName();
+											String accountId = user.getAccountId();
+											String type = user.getType();
+											CSV.printRecord(printer, 
+													spaceKey, spaceId, pageTitle, pageId, 
+													operation, type, userName, accountId, "");
+											Log.info(LOGGER, "Space: " + spaceKey + " = " + spaceId + 
+													" Page: " + pageTitle + " = " + pageId + 
+													" Operatoin: " + operation + 
+													" Type: " + type + 
+													" Name: " + userName + " = " + accountId);
+											userCount++;
+										}
+									}
+									if (restriction.getRestrictions().getGroup() != null) {
+										for (RestrictionGroup group : restriction.getRestrictions().getGroup().getResults()) {
+											String groupName = group.getName();
+											String groupId = group.getId();
+											String type = group.getType();
+											CSV.printRecord(printer, 
+													spaceKey, spaceId, pageTitle, pageId, 
+													operation, type, groupName, groupId, "");
+											Log.info(LOGGER, "Space: " + spaceKey + " = " + spaceId + 
+													" Page: " + pageTitle + " = " + pageId + 
+													" Operatoin: " + operation + 
+													" Type: " + type + 
+													" Name: " + groupName + " = " + groupId);
+											groupCount++;
+										}
+									}
+									hasMore = (groupCount != 0) || (userCount != 0);
+									startAt += Math.max(userCount, groupCount);
+								}
+							} else {
+								String msg = resp.getStatus() + ": " + resp.readEntity(String.class);
+								CSV.printRecord(printer, 
+										spaceKey, spaceId, pageTitle, pageId, 
+										"N/A", "N/A", "N/A", "N/A", msg);
+								Log.error(LOGGER, "Failed to read page restriction for Space " + 
+										spaceKey + " = " + spaceId + 
+										" Page " + pageTitle + " = " + pageId + ": " + msg);
+								break;
+							}	// Http status check
+						}
+					} catch (Exception ex) {
+						CSV.printRecord(printer, 
+								spaceKey, spaceId, pageTitle, pageId, 
+								"N/A", "N/A", "N/A", "N/A", ex.getMessage());
+						Log.error(LOGGER, "Failed to read page restriction for Space " + 
+								spaceKey + " = " + spaceId + 
+								" Page " + pageTitle + " = " + pageId,
+								ex);
+					}
+				}	// For each content
+			}	// Try resource
+		} catch (ParseException pex) {
+			// Ignore
+			return false;
+		} catch (IOException ioex) {
+			Log.error(LOGGER, "Unable to read password", ioex);
+		}
+		return true;
+	}
+	
 	public static void main(String[] args) {
 		if (processDataCenterConfluence(args)) {
 			return;
@@ -1473,6 +1689,9 @@ public class PermissionTool {
 		if (processDataCenterContent(args)) {
 			return;
 		}
+		if (processCloudContentList(args)) {
+			return;
+		}
 		HelpFormatter hf = new HelpFormatter();
 		hf.printHelp("Manage space permission for Confluence Data Center/Server", dcConfluenceOptions);
 		System.out.println("============================================================");
@@ -1483,5 +1702,7 @@ public class PermissionTool {
 		hf.printHelp("Manage project permission for Jira Cloud", cloudJiraOptions);
 		System.out.println("============================================================");
 		hf.printHelp("Manage content restriction for Confluence Data Center/Server", dcContentOptions);
+		System.out.println("============================================================");
+		hf.printHelp("List content restriction for Confluence Cloud", cloudContentListOptions);
 	}
 }

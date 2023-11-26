@@ -18,23 +18,24 @@ public class DCRestrictionsWrapper {
 	/**
 	 * Append data from provided DCRestrictions.
 	 * @param restrictions DCRestrictions
-	 * @return Number of items added
+	 * @return Number of users/groups added, whichever is higher
 	 */
 	public int addData(DCRestrictions restrictions) {
-		int count = 0;
+		int userCount = 0;
+		int groupCount = 0;
 		for (DCRestriction restriction : restrictions.getResults()) {
 			String operation = restriction.getOperation();
 			operationSet.add(operation);
 			for (DCRestrictionTargetGroup group : restriction.getRestrictions().getGroup().getResults()) {
 				addGroup(operation, group.getName());
-				count++;
+				userCount++;
 			}
 			for (DCRestrictionTargetUser user : restriction.getRestrictions().getUser().getResults()) {
 				addUser(operation, user.getUsername());
-				count++;
+				groupCount++;
 			}
 		}
-		return count;
+		return Math.max(userCount, groupCount);
 	}
 	
 	/**
