@@ -22,7 +22,7 @@
         </Root>
         <Logger name="com.igsl" level="debug" additivity="false">
             <AppenderRef ref="RollingFile" level="debug" />
-            <AppenderRef ref="Console" level="debug" />
+            <AppenderRef ref="Console" level="info" />
         </Logger>
     </Loggers>
 </Configuration>

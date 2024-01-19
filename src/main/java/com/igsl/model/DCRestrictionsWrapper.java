@@ -1,6 +1,7 @@
 package com.igsl.model;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -59,6 +60,24 @@ public class DCRestrictionsWrapper {
 			result.add(restriction);
 		}
 		return result;
+	}
+	
+	public Set<String> getPermissions() {
+		return operationSet;
+	}
+	
+	public Set<String> getUsers(String permission) {
+		if (users.containsKey(permission)) {
+			return users.get(permission).keySet();
+		}
+		return Collections.emptySet();
+	}
+	
+	public Set<String> getGroups(String permission) {
+		if (groups.containsKey(permission)) {
+			return groups.get(permission).keySet();
+		}
+		return Collections.emptySet();
 	}
 
 	public int getUserCount(String permission) {

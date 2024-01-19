@@ -3,6 +3,7 @@ package com.igsl;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
@@ -10,8 +11,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.ws.rs.HttpMethod;
 import javax.ws.rs.core.GenericType;
@@ -100,7 +103,9 @@ public class PermissionTool {
 	private static final String PATH_DC_GET_CONTENT = "/rest/api/content";	// GET
 	private static final String PATH_DC_GET_RESTRICTION = "/rest/experimental/content/{id}/restriction";	// GET
 	private static final String PATH_DC_SET_RESTRICTION = "/rest/experimental/content/{id}/restriction";	// PUT
-
+	private static final String PATH_DC_GET_USER = "/rest/api/user";	// GET
+	private static final String PATH_DC_GET_GROUP = "/rest/api/group/{groupName}";	// GET
+	
 	private static final String PATH_CLOUD_GET_PAGE_BY_ID = "/wiki/api/v2/pages/{id}";	// GET
 	
 	@SuppressWarnings("rawtypes")
@@ -442,7 +447,7 @@ public class PermissionTool {
 			if (cmd.hasOption(passwordOption)) {
 				password = cmd.getOptionValue(passwordOption);
 			} else {
-				password = new String(Console.readPassword("Administrator API token: "));
+				password = new String(Console.readPassword("Password: "));
 			}
 			// Content IDs
 			String[] contentIds = cmd.getOptionValues(contentKeyOption);
@@ -563,13 +568,21 @@ public class PermissionTool {
 							for (String addUser : addUsers) {
 								// Check if it already exists
 								if (!originalRestrictions.hasUser(permission.name(), addUser)) {
-									originalRestrictions.addUser(permission.name(), addUser);
-									Log.info(LOGGER, 
-											"Content: " + contentId + 
-											" Restriction: " + permission.name() + 
-											" User: " + addUser + 
-											" will be added");
-									pending++;
+									if (validateUser(addUser, scheme, host, admin, password)) {
+										originalRestrictions.addUser(permission.name(), addUser);
+										Log.info(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" User: " + addUser + 
+												" will be added");
+										pending++;
+									} else {
+										Log.error(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" User: " + addUser + 
+												" is invalid, it will be not be added");
+									}
 								} else {
 									Log.info(LOGGER, 
 											"Content: " + contentId + 
@@ -584,13 +597,21 @@ public class PermissionTool {
 							for (String removeUser : removeUsers) {
 								// Check if it exists
 								if (originalRestrictions.hasUser(permission.name(), removeUser)) {
-									originalRestrictions.removeUser(permission.name(), removeUser);
-									Log.info(LOGGER, 
-											"Content: " + contentId + 
-											" Restriction: " + permission.name() + 
-											" User: " + removeUser + 
-											" will be removed");
-									pending++;
+									if (validateUser(removeUser, scheme, host, admin, password)) {
+										originalRestrictions.removeUser(permission.name(), removeUser);
+										Log.info(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" User: " + removeUser + 
+												" will be removed");
+										pending++;
+									} else {
+										Log.error(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" User: " + removeUser + 
+												" is invalid, it will not be removed");
+									}
 								} else {
 									Log.info(LOGGER, 
 											"Content: " + contentId + 
@@ -605,13 +626,21 @@ public class PermissionTool {
 							for (String addGroup : addGroups) {
 								// Check if it already exists
 								if (!originalRestrictions.hasGroup(permission.name(), addGroup)) {
-									originalRestrictions.addGroup(permission.name(), addGroup);
-									Log.info(LOGGER, 
-											"Content: " + contentId + 
-											" Restriction: " + permission.name() + 
-											" Group: " + addGroup + 
-											" will be added");
-									pending++;
+									if (validateGroup(addGroup, scheme, host, admin, password)) {
+										originalRestrictions.addGroup(permission.name(), addGroup);
+										Log.info(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" Group: " + addGroup + 
+												" will be added");
+										pending++;
+									} else {
+										Log.error(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" Group: " + addGroup + 
+												" is invalid, it will not be added");
+									}
 								} else {
 									Log.info(LOGGER, 
 											"Content: " + contentId + 
@@ -626,13 +655,21 @@ public class PermissionTool {
 							for (String removeGroup : removeGroups) {
 								// Check if it exists
 								if (originalRestrictions.hasGroup(permission.name(), removeGroup)) {
-									originalRestrictions.removeGroup(permission.name(), removeGroup);
-									Log.info(LOGGER, 
-											"Content: " + contentId + 
-											" Restriction: " + permission.name() + 
-											" Group: " + removeGroup + 
-											" will be removed");
-									pending++;
+									if (validateGroup(removeGroup, scheme, host, admin, password)) {
+										originalRestrictions.removeGroup(permission.name(), removeGroup);
+										Log.info(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" Group: " + removeGroup + 
+												" will be removed");
+										pending++;
+									} else {
+										Log.error(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" Group: " + removeGroup + 
+												" is invalid, it will not be removed");
+									}
 								} else {
 									Log.info(LOGGER, 
 											"Content: " + contentId + 
@@ -645,6 +682,39 @@ public class PermissionTool {
 						}
 					}	// If there are restrictions defined
 				}	// For each permission
+				
+				// Check that remaining users/groups are valid, if not, remove them and print warning
+				Set<String> removeInvalidUsers = new HashSet<String>();
+				Set<String> removeInvalidGroups = new HashSet<String>();
+				for (String permission : originalRestrictions.getPermissions()) {
+					// Users
+					for (String user : originalRestrictions.getUsers(permission)) {
+						if (!validateUser(user, scheme, host, admin, password)) {
+							removeInvalidUsers.add(user);
+						}
+					}
+					// Groups
+					for (String group : originalRestrictions.getGroups(permission)) {
+						if (!validateGroup(group, scheme, host, admin, password)) {
+							removeInvalidGroups.add(group);
+						}
+					}
+				}
+				// Remove from restrictions
+				for (String permission : originalRestrictions.getPermissions()) {
+					for (String user : removeInvalidUsers) {
+						Log.info(LOGGER, "Removing existing invalid user: " + user + " for permission: " + permission);
+						originalRestrictions.removeUser(permission, user);
+						pending++;
+						total++;
+					}
+					for (String group : removeInvalidGroups) {
+						Log.info(LOGGER, "Removing existing invalid group: " + group + " for permission: " + permission);
+						originalRestrictions.removeGroup(permission, group);
+						pending++;
+						total++;
+					}
+				}	
 				// Update restrictions
 				if (pending != 0) {
 					Map<String, String> replacements = new HashMap<>();
@@ -697,7 +767,7 @@ public class PermissionTool {
 			if (cmd.hasOption(passwordOption)) {
 				password = cmd.getOptionValue(passwordOption);
 			} else {
-				password = new String(Console.readPassword("Administrator API token: "));
+				password = new String(Console.readPassword("Password: "));
 			}
 			String[] spaceKeys = cmd.getOptionValues(spaceKeyOption);
 			if (spaceKeys.length == 1 && WILDCARD.equals(spaceKeys[0])) {
@@ -1485,6 +1555,80 @@ public class PermissionTool {
 		return true;
 	}
 	
+	// Cached group and user names
+	private static List<String> VALID_GROUPS = new ArrayList<String>();
+	private static List<String> VALID_USERS = new ArrayList<String>();
+	private static List<String> INVALID_GROUPS = new ArrayList<String>();
+	private static List<String> INVALID_USERS = new ArrayList<String>();		
+	
+	private static boolean validateUser(
+			String user, String scheme, String host, String admin, String password) {
+		boolean result = true;
+		if (VALID_USERS.contains(user)) {
+			result = true;
+		} else if (INVALID_USERS.contains(user)) {
+			result = false;
+		} else {
+			// Validate with REST and cache result
+			try {
+				Map<String, Object> query = new HashMap<>();
+				query.put("username", user);
+				Response resp = WebRequest.invoke(
+						scheme, host, PATH_DC_GET_USER, null, 
+						HttpMethod.GET, admin, password, null, null, query, null);
+				if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+					// Valid, cache result
+					VALID_USERS.add(user);
+					result = true;
+				} else {
+					// Invalid, cache result
+					INVALID_USERS.add(user);
+					// Remove it
+					result = false;
+				}
+			} catch (Exception ex) {
+				Log.error(LOGGER, 
+						"Failed to validate user: " + user + ": " + ex.getMessage());
+				result = true;
+			}
+		}
+		return result;
+	}
+	
+	private static boolean validateGroup(
+			String group, String scheme, String host, String admin, String password) {
+		boolean result = true;
+		if (VALID_GROUPS.contains(group)) {
+			result = true;
+		} else if (INVALID_GROUPS.contains(group)) {
+			result = false;
+		} else {
+			// Validate with REST and cache result
+			try {
+				Map<String, String> replacement = new HashMap<>();
+				replacement.put("groupName", group);
+				Response resp = WebRequest.invoke(
+						scheme, host, PATH_DC_GET_GROUP, replacement, 
+						HttpMethod.GET, admin, password, null, null, null, null);
+				if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+					// Valid, cache result
+					VALID_GROUPS.add(group);
+					result = true;
+				} else {
+					// Invalid, cache result
+					INVALID_GROUPS.add(group);
+					// Remove it
+					result = false;
+				}
+			} catch (Exception ex) {
+				Log.error(LOGGER, 
+						"Failed to validate group: " + group + ": " + ex.getMessage());
+				result = true;
+			}
+		}
+		return result;
+	}
+	
 	private static boolean processCloudContentList(String[] args) {
 		try {
 			CommandLineParser parser = new DefaultParser();
@@ -1674,6 +1818,11 @@ public class PermissionTool {
 	}
 	
 	public static void main(String[] args) {
+		StringBuilder sb = new StringBuilder();
+		for (String s : args) {
+			sb.append(" ").append(s);
+		}
+		Log.info(LOGGER, "Command line:" + sb.toString());
 		if (processDataCenterConfluence(args)) {
 			return;
 		}
