@@ -50,6 +50,10 @@ public class WebRequest {
 	
 	private static RateLimiter limiter = new RateLimiter(100, 1000);
 	
+	public static void setRate(int rate, int period) {
+		limiter = new RateLimiter(rate, period);
+	}
+	
 	public static <T> List<T> fetchObjectsWithStartAt(
 			String scheme,
 			String host,

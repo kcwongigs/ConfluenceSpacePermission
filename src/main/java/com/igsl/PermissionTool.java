@@ -131,6 +131,9 @@ public class PermissionTool {
 		return sb.toString();
 	}
 	
+	private static Option rateOption;
+	private static Option periodOption;
+	
 	private static Options dcConfluenceOptions;
 	private static Options dcContentOptions;
 	private static Options cloudConfluenceOptions;
@@ -156,6 +159,21 @@ public class PermissionTool {
 	private static Option dcRestrictionOption;
 	
 	static {
+		rateOption = Option.builder()
+				.argName("Max. REST API calls")
+				.longOpt("rate")
+				.option("r")
+				.hasArg()
+				.desc("Max. no. of REST API calls per period. Default is 100.")
+				.build();
+		periodOption = Option.builder()
+				.argName("Period for REST API calls")
+				.longOpt("period")
+				.option("d")
+				.hasArg()
+				.desc("Period for REST API calls in milliseconds. Default is 1000.")
+				.build();				
+				
 		contentKeyOption = Option.builder()
 				.argName("Content key")
 				.required()
@@ -296,7 +314,7 @@ public class PermissionTool {
 						"Restriction: " + getEnumOptions(DCContentRestriction.class, null))
 				.build();
 
-		dcConfluenceOptions = new Options();
+		dcConfluenceOptions = new Options().addOption(rateOption).addOption(periodOption);
 		dcConfluenceOptions.addOption(Option.builder()
 				.argName("Data Center/Server mode")
 				.required()
@@ -315,7 +333,7 @@ public class PermissionTool {
 		dcConfluenceOptions.addOption(addGroupOption);
 		dcConfluenceOptions.addOption(removeGroupOption);
 		
-		dcContentOptions = new Options();
+		dcContentOptions = new Options().addOption(rateOption).addOption(periodOption);
 		dcContentOptions.addOption(Option.builder()
 				.argName("Data Center/Server content restriction")
 				.required()
@@ -335,7 +353,7 @@ public class PermissionTool {
 		dcContentOptions.addOption(addGroupOption);
 		dcContentOptions.addOption(removeGroupOption);
 		
-		cloudConfluenceOptions = new Options();
+		cloudConfluenceOptions = new Options().addOption(rateOption).addOption(periodOption);
 		cloudConfluenceOptions.addOption(Option.builder()
 				.argName("Cloud Confluence mode")
 				.required()
@@ -354,7 +372,7 @@ public class PermissionTool {
 		cloudConfluenceOptions.addOption(addGroupOption);
 		cloudConfluenceOptions.addOption(removeGroupOption);
 		
-		cloudJiraOptions = new Options();
+		cloudJiraOptions = new Options().addOption(rateOption).addOption(periodOption);
 		cloudJiraOptions.addOption(Option.builder()
 				.argName("Cloud Jira mode")
 				.required()
@@ -373,7 +391,7 @@ public class PermissionTool {
 		cloudJiraOptions.addOption(addGroupOption);
 		cloudJiraOptions.addOption(removeGroupOption);
 		
-		cloudContentOptions = new Options();
+		cloudContentOptions = new Options().addOption(rateOption).addOption(periodOption);
 		cloudContentOptions.addOption(Option.builder()
 				.argName("Cloud Confluence content restriction Mode")
 				.required()
@@ -393,7 +411,7 @@ public class PermissionTool {
 		cloudContentOptions.addOption(addGroupOption);
 		cloudContentOptions.addOption(removeGroupOption);
 		
-		cloudContentListOptions = new Options();
+		cloudContentListOptions = new Options().addOption(rateOption).addOption(periodOption);
 		cloudContentListOptions.addOption(Option.builder()
 				.argName("Cloud Confluence content restriction list Mode")
 				.required()
@@ -439,6 +457,9 @@ public class PermissionTool {
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(dcContentOptions, args, true);
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
 			String admin = cmd.getOptionValue(adminOption);
@@ -759,6 +780,9 @@ public class PermissionTool {
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(dcConfluenceOptions, args, true);
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
 			String admin = cmd.getOptionValue(adminOption);
@@ -901,6 +925,9 @@ public class PermissionTool {
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudJiraOptions, args, true);
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
 			String admin = cmd.getOptionValue(adminOption);
@@ -1063,6 +1090,9 @@ public class PermissionTool {
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudConfluenceOptions, args, true);
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
 			String admin = cmd.getOptionValue(adminOption);
@@ -1301,6 +1331,9 @@ public class PermissionTool {
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudContentOptions, args, true);
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
 			String admin = cmd.getOptionValue(adminOption);
@@ -1633,6 +1666,9 @@ public class PermissionTool {
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudContentListOptions, args, true);
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
 			String admin = cmd.getOptionValue(adminOption);
