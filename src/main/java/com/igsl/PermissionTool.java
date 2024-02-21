@@ -3,7 +3,6 @@ package com.igsl;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.lang.reflect.Method;
-import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
@@ -41,11 +40,6 @@ import com.igsl.model.ContentRestrictions;
 import com.igsl.model.DCDataObject;
 import com.igsl.model.DCPage;
 import com.igsl.model.DCPages;
-import com.igsl.model.DCRestriction;
-import com.igsl.model.DCRestrictionTargetGroup;
-import com.igsl.model.DCRestrictionTargetUser;
-import com.igsl.model.DCRestrictionTargetUsers;
-import com.igsl.model.DCRestrictionWrapper;
 import com.igsl.model.DCRestrictions;
 import com.igsl.model.DCRestrictionsWrapper;
 import com.igsl.model.GetPermission;
@@ -70,6 +64,9 @@ public class PermissionTool {
 	private static final Logger LOGGER = LogManager.getLogger(PermissionTool.class);
 	
 	private static final SimpleDateFormat SDF = new SimpleDateFormat("yyyyMMdd-HHmmss");
+	
+	private static final String DEFAULT_RATE = "100";
+	private static final String DEFAULT_PERIOD = "1000";
 	
 	private static final String DEFAULT_SCHEME = "https";
 	private static final String WILDCARD = "%";
@@ -454,11 +451,14 @@ public class PermissionTool {
 	private static boolean processDataCenterContent(String[] args) {
 		int total = 0;
 		int success = 0;
+		final String UNKNOWN = "[UNKNOWN]";
+		Map<String, Set<String>> failedContent = new HashMap<>();
+		failedContent.put(UNKNOWN, new HashSet<>());
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(dcContentOptions, args, true);
-			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
-			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, DEFAULT_RATE));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, DEFAULT_PERIOD));
 			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
@@ -471,6 +471,7 @@ public class PermissionTool {
 				password = new String(Console.readPassword("Password: "));
 			}
 			// Content IDs
+			Map<String, List<String>> contentMap = new HashMap<>();
 			String[] contentIds = cmd.getOptionValues(contentKeyOption);
 			if (contentIds != null && contentIds.length == 1 && WILDCARD.equals(contentIds[0])) {
 				// Find contents from space keys
@@ -501,26 +502,35 @@ public class PermissionTool {
 					}
 				}
 				// Get contents
-				List<String> contentIdList = new ArrayList<>();
+				List<String> contentList = new ArrayList<>();
 				for (String spaceKey : spaceKeys) {
 					try {
+						if (!contentMap.containsKey(spaceKeys)) {
+							contentMap.put(spaceKey, new ArrayList<>());
+						}
 						Map<String, Object> query = new HashMap<>();
 						query.put("spaceKey", spaceKey);
 						List<DCPage> pages = WebRequest.fetchObjectsWithStartAt(
 								scheme, host, PATH_DC_GET_CONTENT, null, 
-								HttpMethod.GET, admin, password, null, null, query, "start", null, DCPages.class);
+								HttpMethod.GET, admin, password, null, null, query, 
+								"start", null, DCPages.class);
 						for (DCPage page : pages) {
-							contentIdList.add(page.getId());
+							contentList.add(page.getId());
+							contentMap.get(spaceKey).add(page.getId());
 							Log.info(LOGGER, 
-									"Page found: " + page.getTitle() + " = " + page.getId() + " in space " + spaceKey);
+									"Page found: " + page.getTitle() + " = " + page.getId() + 
+									" in space " + spaceKey);
 						}
 					} catch (Exception ex) {
 						Log.error(LOGGER, "Failed to retrieve content list from space " + spaceKey, ex);
 						return true;
 					}
 				}
-				contentIds = contentIdList.toArray(new String[0]);
-			} 
+			} else {
+				for (String contentId : contentIds) {
+					contentMap.get(UNKNOWN).add(contentId);
+				}
+			}
 			// Restriction
 			String[] restrictions = cmd.getOptionValues(dcRestrictionOption);
 			List<DCContentRestriction> restrictionList = new ArrayList<>();
@@ -536,234 +546,240 @@ public class PermissionTool {
 			String[] removeUsers = cmd.getOptionValues(removeUserOption);
 			String[] addGroups = cmd.getOptionValues(addGroupOption);
 			String[] removeGroups = cmd.getOptionValues(removeGroupOption);
-			for (String contentId : contentIds) {
-				// Fetch original restrictions
-				DCRestrictionsWrapper originalRestrictions = new DCRestrictionsWrapper();
-				try {
-					Map<String, String> replacements = new HashMap<>();
-					replacements.put("id", contentId);
-					// For get restriction, the start parameter is for nested objects
-					// So the PagedWithNumer interface won't work with it
-					// Instead we do it by translating the structure to a flatter design, 
-					// and repeat calls until both users and groups come back at 0 item.
-					boolean hasMore = true;
-					int startAt = 0;
-					while (hasMore) {
-						Map<String, Object> query = new HashMap<>();
-						query.put("start", startAt);
-						Response resp = WebRequest.invoke(
-								scheme, host, PATH_DC_GET_RESTRICTION, replacements, 
-								HttpMethod.GET, admin, password, null, null, query, null);
-						if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
-							DCRestrictions res = resp.readEntity(DCRestrictions.class);
-							int count = originalRestrictions.addData(res);
-							hasMore = count != 0;
-							startAt += count;
-						} else {
-							throw new Exception("Failed to retrieve original restrictions for " + contentId + ": " + 
-									resp.readEntity(String.class));
-						}						
-					}					
-				} catch (Exception ex) {
-					Log.error(LOGGER, "Failed to retrieve original restrictions for " + contentId, ex);
-					continue;
-				}
-				Log.debug(LOGGER, "Content: " + contentId + " Original restrictions: " +  
-						new ObjectMapper().writeValueAsString(originalRestrictions.convert()));
-				// Modify restrictions
-				int pending = 0;
-				for (DCContentRestriction permission : restrictionList) {
-					if (originalRestrictions.getUserCount(permission.name()) == 0 && 
-						originalRestrictions.getGroupCount(permission.name()) == 0) {
-						Log.info(LOGGER, 
-								"Content: " + contentId + 
-								" Restriction: " + permission.name() + 
-								" is not restricted. Actions will not be performed.");
-					} else {
-						total += 
-								((addUsers != null)? addUsers.length : 0) + 
-								((removeUsers != null)? removeUsers.length : 0) + 
-								((addGroups != null)? addGroups.length : 0) + 
-								((removeGroups != null)? removeGroups.length : 0);
-						if (addUsers != null) {
-							for (String addUser : addUsers) {
-								// Check if it already exists
-								if (!originalRestrictions.hasUser(permission.name(), addUser)) {
-									if (validateUser(addUser, scheme, host, admin, password)) {
-										originalRestrictions.addUser(permission.name(), addUser);
-										Log.info(LOGGER, 
-												"Content: " + contentId + 
-												" Restriction: " + permission.name() + 
-												" User: " + addUser + 
-												" will be added");
-										pending++;
-									} else {
-										Log.error(LOGGER, 
-												"Content: " + contentId + 
-												" Restriction: " + permission.name() + 
-												" User: " + addUser + 
-												" is invalid, it will be not be added");
-									}
-								} else {
-									Log.info(LOGGER, 
-											"Content: " + contentId + 
-											" Restriction: " + permission.name() + 
-											" User: " + addUser + 
-											" already added");
-									success++;
-								}
-							}
-						}
-						if (removeUsers != null) {
-							for (String removeUser : removeUsers) {
-								// Check if it exists
-								if (originalRestrictions.hasUser(permission.name(), removeUser)) {
-									if (validateUser(removeUser, scheme, host, admin, password)) {
-										originalRestrictions.removeUser(permission.name(), removeUser);
-										Log.info(LOGGER, 
-												"Content: " + contentId + 
-												" Restriction: " + permission.name() + 
-												" User: " + removeUser + 
-												" will be removed");
-										pending++;
-									} else {
-										Log.error(LOGGER, 
-												"Content: " + contentId + 
-												" Restriction: " + permission.name() + 
-												" User: " + removeUser + 
-												" is invalid, it will not be removed");
-									}
-								} else {
-									Log.info(LOGGER, 
-											"Content: " + contentId + 
-											" Restriction: " + permission.name() + 
-											" User: " + removeUser + 
-											" already removed");
-									success++;
-								}
-							}
-						}
-						if (addGroups != null) {
-							for (String addGroup : addGroups) {
-								// Check if it already exists
-								if (!originalRestrictions.hasGroup(permission.name(), addGroup)) {
-									if (validateGroup(addGroup, scheme, host, admin, password)) {
-										originalRestrictions.addGroup(permission.name(), addGroup);
-										Log.info(LOGGER, 
-												"Content: " + contentId + 
-												" Restriction: " + permission.name() + 
-												" Group: " + addGroup + 
-												" will be added");
-										pending++;
-									} else {
-										Log.error(LOGGER, 
-												"Content: " + contentId + 
-												" Restriction: " + permission.name() + 
-												" Group: " + addGroup + 
-												" is invalid, it will not be added");
-									}
-								} else {
-									Log.info(LOGGER, 
-											"Content: " + contentId + 
-											" Restriction: " + permission.name() + 
-											" Group: " + addGroup + 
-											" already added");
-									success++;
-								}
-							}
-						}
-						if (removeGroups != null) {
-							for (String removeGroup : removeGroups) {
-								// Check if it exists
-								if (originalRestrictions.hasGroup(permission.name(), removeGroup)) {
-									if (validateGroup(removeGroup, scheme, host, admin, password)) {
-										originalRestrictions.removeGroup(permission.name(), removeGroup);
-										Log.info(LOGGER, 
-												"Content: " + contentId + 
-												" Restriction: " + permission.name() + 
-												" Group: " + removeGroup + 
-												" will be removed");
-										pending++;
-									} else {
-										Log.error(LOGGER, 
-												"Content: " + contentId + 
-												" Restriction: " + permission.name() + 
-												" Group: " + removeGroup + 
-												" is invalid, it will not be removed");
-									}
-								} else {
-									Log.info(LOGGER, 
-											"Content: " + contentId + 
-											" Restriction: " + permission.name() + 
-											" Group: " + removeGroup + 
-											" already removed");
-									success++;
-								}							
-							}
-						}
-					}	// If there are restrictions defined
-				}	// For each permission
-				
-				// Check that remaining users/groups are valid, if not, remove them and print warning
-				Set<String> removeInvalidUsers = new HashSet<String>();
-				Set<String> removeInvalidGroups = new HashSet<String>();
-				for (String permission : originalRestrictions.getPermissions()) {
-					// Users
-					for (String user : originalRestrictions.getUsers(permission)) {
-						if (!validateUser(user, scheme, host, admin, password)) {
-							removeInvalidUsers.add(user);
-						}
-					}
-					// Groups
-					for (String group : originalRestrictions.getGroups(permission)) {
-						if (!validateGroup(group, scheme, host, admin, password)) {
-							removeInvalidGroups.add(group);
-						}
-					}
-				}
-				// Remove from restrictions
-				for (String permission : originalRestrictions.getPermissions()) {
-					for (String user : removeInvalidUsers) {
-						Log.info(LOGGER, "Removing existing invalid user: " + user + " for permission: " + permission);
-						originalRestrictions.removeUser(permission, user);
-						pending++;
-						total++;
-					}
-					for (String group : removeInvalidGroups) {
-						Log.info(LOGGER, "Removing existing invalid group: " + group + " for permission: " + permission);
-						originalRestrictions.removeGroup(permission, group);
-						pending++;
-						total++;
-					}
-				}	
-				// Update restrictions
-				if (pending != 0) {
-					Map<String, String> replacements = new HashMap<>();
-					replacements.put("id", contentId);
+			for (Map.Entry<String, List<String>> content : contentMap.entrySet()) {
+				failedContent.put(content.getKey(), new HashSet<>());
+				for (String contentId : content.getValue()) {
+					// Fetch original restrictions
+					DCRestrictionsWrapper originalRestrictions = new DCRestrictionsWrapper();
 					try {
-						Log.debug(LOGGER, "Content: " + contentId + " New Restrictions: " +  
-								new ObjectMapper().writeValueAsString(originalRestrictions.convert()));
-						Response resp = WebRequest.invoke(
-								scheme, host, PATH_DC_SET_RESTRICTION, replacements, 
-								HttpMethod.PUT, admin, password, null, null, null, originalRestrictions.convert());
-						if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
-							Log.info(LOGGER, "Content: " + contentId + " updated " + pending + " item(s)");
-							success += pending;
-						} else {
-							// Fail for all items
-							Log.error(LOGGER, 
-									"Content: " + contentId + " failed to update " + pending + " item(s): " + 
-									resp.readEntity(String.class));
-						}
+						Map<String, String> replacements = new HashMap<>();
+						replacements.put("id", contentId);
+						// For get restriction, the start parameter is for nested objects
+						// So the PagedWithNumer interface won't work with it
+						// Instead we do it by translating the structure to a flatter design, 
+						// and repeat calls until both users and groups come back at 0 item.
+						boolean hasMore = true;
+						int startAt = 0;
+						while (hasMore) {
+							Map<String, Object> query = new HashMap<>();
+							query.put("start", startAt);
+							Response resp = WebRequest.invoke(
+									scheme, host, PATH_DC_GET_RESTRICTION, replacements, 
+									HttpMethod.GET, admin, password, null, null, query, null);
+							if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+								DCRestrictions res = resp.readEntity(DCRestrictions.class);
+								int count = originalRestrictions.addData(res);
+								hasMore = count != 0;
+								startAt += count;
+							} else {
+								throw new Exception("Failed to retrieve original restrictions for " + contentId + ": " + 
+										resp.readEntity(String.class));
+							}						
+						}					
 					} catch (Exception ex) {
-						Log.error(LOGGER, 
-								"Content: " + contentId + " failed to update " + pending + " item(s): ", 
-								ex);
+						Log.error(LOGGER, "Failed to retrieve original restrictions for " + contentId, ex);
+						failedContent.get(content.getKey()).add(contentId);
+						continue;
 					}
-				} else {
-					Log.info(LOGGER, "Content: " + contentId + " no updates required");
-				}
-			}	// For each content id
+					Log.debug(LOGGER, "Content: " + contentId + " Original restrictions: " +  
+							new ObjectMapper().writeValueAsString(originalRestrictions.convert()));
+					// Modify restrictions
+					int pending = 0;
+					for (DCContentRestriction permission : restrictionList) {
+						if (originalRestrictions.getUserCount(permission.name()) == 0 && 
+							originalRestrictions.getGroupCount(permission.name()) == 0) {
+							Log.info(LOGGER, 
+									"Content: " + contentId + 
+									" Restriction: " + permission.name() + 
+									" is not restricted. Actions will not be performed.");
+						} else {
+							total += 
+									((addUsers != null)? addUsers.length : 0) + 
+									((removeUsers != null)? removeUsers.length : 0) + 
+									((addGroups != null)? addGroups.length : 0) + 
+									((removeGroups != null)? removeGroups.length : 0);
+							if (addUsers != null) {
+								for (String addUser : addUsers) {
+									// Check if it already exists
+									if (!originalRestrictions.hasUser(permission.name(), addUser)) {
+										if (validateUser(addUser, scheme, host, admin, password)) {
+											originalRestrictions.addUser(permission.name(), addUser);
+											Log.info(LOGGER, 
+													"Content: " + contentId + 
+													" Restriction: " + permission.name() + 
+													" User: " + addUser + 
+													" will be added");
+											pending++;
+										} else {
+											Log.error(LOGGER, 
+													"Content: " + contentId + 
+													" Restriction: " + permission.name() + 
+													" User: " + addUser + 
+													" is invalid, it will be not be added");
+										}
+									} else {
+										Log.info(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" User: " + addUser + 
+												" already added");
+										success++;
+									}
+								}
+							}
+							if (removeUsers != null) {
+								for (String removeUser : removeUsers) {
+									// Check if it exists
+									if (originalRestrictions.hasUser(permission.name(), removeUser)) {
+										if (validateUser(removeUser, scheme, host, admin, password)) {
+											originalRestrictions.removeUser(permission.name(), removeUser);
+											Log.info(LOGGER, 
+													"Content: " + contentId + 
+													" Restriction: " + permission.name() + 
+													" User: " + removeUser + 
+													" will be removed");
+											pending++;
+										} else {
+											Log.error(LOGGER, 
+													"Content: " + contentId + 
+													" Restriction: " + permission.name() + 
+													" User: " + removeUser + 
+													" is invalid, it will not be removed");
+										}
+									} else {
+										Log.info(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" User: " + removeUser + 
+												" already removed");
+										success++;
+									}
+								}
+							}
+							if (addGroups != null) {
+								for (String addGroup : addGroups) {
+									// Check if it already exists
+									if (!originalRestrictions.hasGroup(permission.name(), addGroup)) {
+										if (validateGroup(addGroup, scheme, host, admin, password)) {
+											originalRestrictions.addGroup(permission.name(), addGroup);
+											Log.info(LOGGER, 
+													"Content: " + contentId + 
+													" Restriction: " + permission.name() + 
+													" Group: " + addGroup + 
+													" will be added");
+											pending++;
+										} else {
+											Log.error(LOGGER, 
+													"Content: " + contentId + 
+													" Restriction: " + permission.name() + 
+													" Group: " + addGroup + 
+													" is invalid, it will not be added");
+										}
+									} else {
+										Log.info(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" Group: " + addGroup + 
+												" already added");
+										success++;
+									}
+								}
+							}
+							if (removeGroups != null) {
+								for (String removeGroup : removeGroups) {
+									// Check if it exists
+									if (originalRestrictions.hasGroup(permission.name(), removeGroup)) {
+										if (validateGroup(removeGroup, scheme, host, admin, password)) {
+											originalRestrictions.removeGroup(permission.name(), removeGroup);
+											Log.info(LOGGER, 
+													"Content: " + contentId + 
+													" Restriction: " + permission.name() + 
+													" Group: " + removeGroup + 
+													" will be removed");
+											pending++;
+										} else {
+											Log.error(LOGGER, 
+													"Content: " + contentId + 
+													" Restriction: " + permission.name() + 
+													" Group: " + removeGroup + 
+													" is invalid, it will not be removed");
+										}
+									} else {
+										Log.info(LOGGER, 
+												"Content: " + contentId + 
+												" Restriction: " + permission.name() + 
+												" Group: " + removeGroup + 
+												" already removed");
+										success++;
+									}							
+								}
+							}
+						}	// If there are restrictions defined
+					}	// For each permission
+					
+					// Check that remaining users/groups are valid, if not, remove them and print warning
+					Set<String> removeInvalidUsers = new HashSet<String>();
+					Set<String> removeInvalidGroups = new HashSet<String>();
+					for (String permission : originalRestrictions.getPermissions()) {
+						// Users
+						for (String user : originalRestrictions.getUsers(permission)) {
+							if (!validateUser(user, scheme, host, admin, password)) {
+								removeInvalidUsers.add(user);
+							}
+						}
+						// Groups
+						for (String group : originalRestrictions.getGroups(permission)) {
+							if (!validateGroup(group, scheme, host, admin, password)) {
+								removeInvalidGroups.add(group);
+							}
+						}
+					}
+					// Remove from restrictions
+					for (String permission : originalRestrictions.getPermissions()) {
+						for (String user : removeInvalidUsers) {
+							Log.info(LOGGER, "Removing existing invalid user: " + user + " for permission: " + permission);
+							originalRestrictions.removeUser(permission, user);
+							pending++;
+							total++;
+						}
+						for (String group : removeInvalidGroups) {
+							Log.info(LOGGER, "Removing existing invalid group: " + group + " for permission: " + permission);
+							originalRestrictions.removeGroup(permission, group);
+							pending++;
+							total++;
+						}
+					}	
+					// Update restrictions
+					if (pending != 0) {
+						Map<String, String> replacements = new HashMap<>();
+						replacements.put("id", contentId);
+						try {
+							Log.debug(LOGGER, "Content: " + contentId + " New Restrictions: " +  
+									new ObjectMapper().writeValueAsString(originalRestrictions.convert()));
+							Response resp = WebRequest.invoke(
+									scheme, host, PATH_DC_SET_RESTRICTION, replacements, 
+									HttpMethod.PUT, admin, password, null, null, null, originalRestrictions.convert());
+							if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+								Log.info(LOGGER, "Content: " + contentId + " updated " + pending + " item(s)");
+								success += pending;
+							} else {
+								// Fail for all items
+								failedContent.get(content.getKey()).add(contentId);
+								Log.error(LOGGER, 
+										"Content: " + contentId + " failed to update " + pending + " item(s): " + 
+										resp.readEntity(String.class));
+							}
+						} catch (Exception ex) {
+							failedContent.get(content.getKey()).add(contentId);
+							Log.error(LOGGER, 
+									"Content: " + contentId + " failed to update " + pending + " item(s): ", 
+									ex);
+						}
+					} else {
+						Log.info(LOGGER, "Content: " + contentId + " no updates required");
+					}
+				}	// For each content id
+			}	// For each project key
 		} catch (ParseException pex) {
 			// Ignore
 			return false;
@@ -771,17 +787,28 @@ public class PermissionTool {
 			Log.error(LOGGER, "Unable to read password", ioex);
 		}
 		Log.info(LOGGER, "Success/total: " + success + "/" + total);
+		for (Map.Entry<String, Set<String>> entry : failedContent.entrySet()) {
+			if (entry.getValue().size() != 0) {
+				StringBuilder sb = new StringBuilder();
+				for (String contentId : entry.getValue()) {
+					sb.append(contentId).append(" ");
+				}
+				Log.error(LOGGER, 
+						"Failed Project: " + entry.getKey() + "; Failed Content: " + sb.toString());
+			}
+		}
 		return true;
 	}
 	
 	private static boolean processDataCenterConfluence(String[] args) {
 		int total = 0;
 		int success = 0;
+		Set<String> failedSpaces = new HashSet<>();
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(dcConfluenceOptions, args, true);
-			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
-			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, DEFAULT_RATE));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, DEFAULT_PERIOD));
 			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
@@ -848,10 +875,13 @@ public class PermissionTool {
 										HttpMethod.POST, admin, password, null, null, null, obj.format());
 								if (logResult(true, obj, resp)) {
 									success++;
+								} else {
+									failedSpaces.add(spaceKey);
 								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(true, obj, ex.getMessage());
+								failedSpaces.add(spaceKey);
 							}
 						}
 					}
@@ -865,10 +895,13 @@ public class PermissionTool {
 										HttpMethod.POST, admin, password, null, null, null, obj.format());
 								if (logResult(false, obj, resp)) {
 									success++;
+								} else {
+									failedSpaces.add(spaceKey);
 								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(false, obj, ex.getMessage());
+								failedSpaces.add(spaceKey);
 							}
 						}
 					}
@@ -882,10 +915,13 @@ public class PermissionTool {
 										HttpMethod.POST, admin, password, null, null, null, obj.format());
 								if (logResult(true, obj, resp)) {
 									success++;
+								} else {
+									failedSpaces.add(spaceKey);
 								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(true, obj, ex.getMessage());
+								failedSpaces.add(spaceKey);
 							}
 						}
 					}
@@ -899,10 +935,13 @@ public class PermissionTool {
 										HttpMethod.POST, admin, password, null, null, null, obj.format());
 								if (logResult(false, obj, resp)) {
 									success++;
+								} else {
+									failedSpaces.add(spaceKey);
 								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(false, obj, ex.getMessage());
+								failedSpaces.add(spaceKey);
 							}
 						}	
 					}
@@ -916,17 +955,26 @@ public class PermissionTool {
 			Log.error(LOGGER, "Unable to read password", ioex);
 		}
 		Log.info(LOGGER, "Success/total: " + success + "/" + total);
+		if (failedSpaces.size() != 0) {
+			StringBuilder sb = new StringBuilder();
+			for (String spaceKey : failedSpaces) {
+				sb.append(spaceKey).append(" ");
+			}
+			Log.error(LOGGER, "Failed Spaces: " + sb.toString());
+		}
 		return true;
 	}
 	
 	private static boolean processCloudJira(String[] args) {
 		int total = 0;
 		int success = 0;
+		// Key is project key, value is list of roles
+		Map<String, Set<String>> failedProjects = new HashMap<>();	
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudJiraOptions, args, true);
-			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
-			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, DEFAULT_RATE));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, DEFAULT_PERIOD));
 			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
@@ -1008,6 +1056,7 @@ public class PermissionTool {
 			String[] addGroups = cmd.getOptionValues(addGroupOption);
 			String[] removeGroups = cmd.getOptionValues(removeGroupOption);
 			for (String projectKey : projectKeys) {
+				failedProjects.put(projectKey, new HashSet<>());				
 				for (Map.Entry<String, String> role : roleIdList.entrySet()) {
 					Map<String, String> pathReplacement = new HashMap<>();
 					pathReplacement.put("projectIdOrKey", projectKey);
@@ -1028,9 +1077,12 @@ public class PermissionTool {
 									HttpMethod.POST, admin, password, null, null, null, add);
 							if (logResult(true, add, resp)) {
 								success += add.getGroupId().size() + add.getUser().size();
+							} else {
+								failedProjects.get(projectKey).add(role.getValue());
 							}
 						} catch (Exception ex) {
 							logError(true, add, ex.getMessage());
+							failedProjects.get(projectKey).add(role.getValue());
 						}
 					}
 					AddProjectRoleActor remove = new AddProjectRoleActor(projectKey, role.getValue());
@@ -1052,9 +1104,12 @@ public class PermissionTool {
 										HttpMethod.DELETE, admin, password, null, null, query, null);
 								if (logResult(false, remove, resp)) {
 									success++;
+								} else {
+									failedProjects.get(projectKey).add(role.getValue());
 								}
 							} catch (Exception ex) {
 								logError(false, remove, ex.getMessage());
+								failedProjects.get(projectKey).add(role.getValue());
 							}
 						}
 						for (String group : remove.getGroupId()) {
@@ -1066,9 +1121,12 @@ public class PermissionTool {
 										HttpMethod.DELETE, admin, password, null, null, query, null);
 								if (logResult(false, remove, resp)) {
 									success++;
+								} else {
+									failedProjects.get(projectKey).add(role.getValue());
 								}
 							} catch (Exception ex) {
 								logError(false, remove, ex.getMessage());
+								failedProjects.get(projectKey).add(role.getValue());
 							}
 						}
 					}
@@ -1081,17 +1139,27 @@ public class PermissionTool {
 			Log.error(LOGGER, "Unable to read password", ioex);
 		}
 		Log.info(LOGGER, "Success/total: " + success + "/" + total);
+		for (Map.Entry<String, Set<String>> entry : failedProjects.entrySet()) {
+			if (entry.getValue().size() != 0) {
+				StringBuilder sb = new StringBuilder();
+				for (String roleId : entry.getValue()) {
+					sb.append(roleId).append(" ");
+				}
+				Log.error(LOGGER, "Failed Space: " + entry.getKey() + " Failed Roles: " + sb.toString());
+			}
+		}
 		return true;
 	}
 	
 	private static boolean processCloudConfluence(String[] args) {
 		int total = 0;
 		int success = 0;
+		Set<String> failedSpaces = new HashSet<>();
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudConfluenceOptions, args, true);
-			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
-			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, DEFAULT_RATE));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, DEFAULT_PERIOD));
 			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
@@ -1163,6 +1231,7 @@ public class PermissionTool {
 							HttpMethod.GET, admin, password, null, null, null, null, GetPermissions.class);
 					} catch (Exception ex) {
 						Log.error(LOGGER, "Unable to retrieve permission list", ex);
+						failedSpaces.add(spaceKey);
 						continue;
 					}
 				}
@@ -1192,10 +1261,13 @@ public class PermissionTool {
 										HttpMethod.POST, admin, password, null, null, null, obj);
 								if (logResult(true, data, resp)) {
 									success++;
+								} else {
+									failedSpaces.add(spaceKey);
 								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(true, data, ex.getMessage());
+								failedSpaces.add(spaceKey);
 							}
 						}
 					}
@@ -1231,12 +1303,16 @@ public class PermissionTool {
 											HttpMethod.DELETE, admin, password, null, null, null, null);
 									if (logResult(false, data, resp)) {
 										success++;
+									} else {
+										failedSpaces.add(spaceKey);
 									}
 								} catch (Exception ex) {
 									logError(false, data, ex.getMessage());
+									failedSpaces.add(spaceKey);
 								}
 							} else {
 								logError(false, data, "Permission not found");
+								failedSpaces.add(spaceKey);
 							}
 						}
 					}
@@ -1263,10 +1339,13 @@ public class PermissionTool {
 										HttpMethod.POST, admin, password, null, null, null, obj);
 								if (logResult(true, data, resp)) {
 									success++;
+								} else {
+									failedSpaces.add(spaceKey);
 								}
 							} catch (Exception ex) {
 								Log.error(LOGGER, "Error", ex);
 								logError(true, data, ex.getMessage());
+								failedSpaces.add(spaceKey);
 							}
 						}
 					}
@@ -1298,12 +1377,16 @@ public class PermissionTool {
 											HttpMethod.DELETE, admin, password, null, null, null, null);
 									if (logResult(false, data, resp)) {
 										success++;
+									} else {
+										failedSpaces.add(spaceKey);
 									}
 								} catch (Exception ex) {
 									logError(false, data, ex.getMessage());
+									failedSpaces.add(spaceKey);
 								}
 							} else {
 								logError(false, data, "Permission not found");
+								failedSpaces.add(spaceKey);
 							}
 						}	
 					}
@@ -1317,6 +1400,13 @@ public class PermissionTool {
 			Log.error(LOGGER, "Unable to read password", ioex);
 		}
 		Log.info(LOGGER, "Success/total: " + success + "/" + total);
+		if (failedSpaces.size() != 0) {
+			StringBuilder sb = new StringBuilder();
+			for (String spaceKey : failedSpaces) {
+				sb.append(spaceKey).append(" ");
+			}
+			Log.error(LOGGER, "Failed Spaces: " + sb.toString());
+		}
 		return true;
 	}
 	
@@ -1328,11 +1418,14 @@ public class PermissionTool {
 	private static boolean processCloudContent(String[] args) {
 		int total = 0;
 		int success = 0;
+		final String UNKNOWN = "[UNKNOWN]";
+		Map<String, Set<String>> failedContent = new HashMap<>();
+		failedContent.put(UNKNOWN, new HashSet<>());
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudContentOptions, args, true);
-			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
-			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, DEFAULT_RATE));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, DEFAULT_PERIOD));
 			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
@@ -1355,7 +1448,7 @@ public class PermissionTool {
 				}
 			}
 			// Convert space keys to space ids as comma-delimited list
-			List<String> spaceIdList = new ArrayList<>();
+			Map<String, String> spaceMap = new HashMap<>();	// Space Key as key, Space ID as value
 			String[] spaceKeys = cmd.getOptionValues(spaceKeyOption);
 			// Get spaces
 			try {
@@ -1377,10 +1470,11 @@ public class PermissionTool {
 						scheme, host, PATH_CLOUD_GET_SPACES, null, 
 						HttpMethod.GET, admin, password, null, null, query, null, SpaceObjects.class);
 				for (SpaceObject so : spaceObjects) {
-					spaceIdList.add(so.getId());
+					spaceMap.put(so.getKey(), so.getId());
 					Log.info(LOGGER, "Space found: " + so.getKey() + " = " + so.getId());
+					failedContent.put(so.getKey(), new HashSet<>());
 				}
-				if (spaceIdList.size() == 0) {
+				if (spaceMap.size() == 0) {
 					Log.error(LOGGER, "No specified space(s) can be found");
 					return true;
 				}
@@ -1388,196 +1482,225 @@ public class PermissionTool {
 				Log.error(LOGGER, "Failed to retrieve space list", ex);
 				return true;
 			}
-			List<String> contentList = new ArrayList<>();
+			Map<String, List<String>> contentMap = new HashMap<>();	// Space Key as key
 			String[] contentIds = cmd.getOptionValues(contentKeyOption);
 			if (contentIds.length == 1 && WILDCARD.equals(contentIds[0])) {
 				// Get all pages, one space at a time
-				for (String spaceId : spaceIdList) {
+				for (Map.Entry<String, String> space : spaceMap.entrySet()) {
 					Map<String, Object> query = new HashMap<>();
-					query.put("space-id", spaceId);
+					query.put("space-id", space.getValue());
 					try {
 						List<Page> pages = WebRequest.fetchObjectsWithCursor(
 							scheme, host, PATH_CLOUD_GET_PAGES, null, 
 							HttpMethod.GET, admin, password, null, null, query, null, Pages.class);
 						for (Page page : pages) {
 							Log.info(LOGGER, 
-									"Space: " + spaceId + " Page found: " + page.getTitle() + " = " + page.getId());
-							contentList.add(page.getId());
+									"Space: " + space.getKey() + " (" + space.getValue() + ")" + 
+									" Page found: " + page.getTitle() + " = " + page.getId());
+							if (contentMap.containsKey(space.getKey())) {
+								contentMap.get(space.getKey()).add(page.getId());
+							} else {
+								List<String> list = new ArrayList<>();
+								list.add(page.getId());
+								contentMap.put(space.getKey(), list);
+							}
 						}
 					} catch (Exception ex) {
-						Log.error(LOGGER, "Unable to retrieve page list for space " + spaceId, ex);
+						Log.error(LOGGER, "Unable to retrieve page list for space " + space, ex);
+						failedContent.put(space.getKey(), new HashSet<>());
 					}
 				}
 			} else {
 				for (String contentId : contentIds) {
-					contentList.add(contentId);
+					contentMap.get(UNKNOWN).add(contentId);
 				}
 			}
 			String[] addUsers = cmd.getOptionValues(addUserOption);
 			String[] removeUsers = cmd.getOptionValues(removeUserOption);
 			String[] addGroups = cmd.getOptionValues(addGroupOption);
 			String[] removeGroups = cmd.getOptionValues(removeGroupOption);
-			for (String contentId : contentList) {
-				// Check if there is any restriction
-				try {
-					Map<String, String> replacements = new HashMap<>();
-					replacements.put("id", contentId);
-					Response resp = WebRequest.invoke(
-							scheme, host, PATH_CLOUD_GET_RESTRICTION, replacements, 
-							HttpMethod.GET, admin, password, null, null, null, null);
-					if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
-						ContentRestrictions contentRestrictions = resp.readEntity(ContentRestrictions.class);
-						int targetCount = 0;
-						for (ContentRestriction contentRestriction : contentRestrictions.getResults()) {
-							targetCount += contentRestriction.getRestrictions().getGroup().getResults().size();
-							targetCount += contentRestriction.getRestrictions().getUser().getResults().size();							
-						}
-						if (targetCount == 0) {
-							// Nothing defined
-							// Skip the actions, print message and count them as success
-							if (addUsers != null) {
-								for (String addUser: addUsers) { 
-									for (CloudContentRestriction restriction : restrictionList) {
-										total++;
-										success++;
-										AddRestriction data = new AddRestriction(
-												contentId, restriction.name(), true, addUser);
-										logSkip(true, data, "Content is not restricted");
+			for (Map.Entry<String, List<String>> content : contentMap.entrySet()) {
+				for (String contentId : content.getValue()) {
+					// Check if there is any restriction
+					try {
+						Map<String, String> replacements = new HashMap<>();
+						replacements.put("id", contentId);
+						Response resp = WebRequest.invoke(
+								scheme, host, PATH_CLOUD_GET_RESTRICTION, replacements, 
+								HttpMethod.GET, admin, password, null, null, null, null);
+						if ((resp.getStatus() & HttpStatus.SC_OK) == HttpStatus.SC_OK) {
+							ContentRestrictions contentRestrictions = resp.readEntity(
+									ContentRestrictions.class);
+							int targetCount = 0;
+							for (ContentRestriction contentRestriction : contentRestrictions.getResults()) {
+								targetCount += contentRestriction.getRestrictions().getGroup()
+										.getResults().size();
+								targetCount += contentRestriction.getRestrictions().getUser()
+										.getResults().size();							
+							}
+							if (targetCount == 0) {
+								// Nothing defined
+								// Skip the actions, print message and count them as success
+								if (addUsers != null) {
+									for (String addUser: addUsers) { 
+										for (CloudContentRestriction restriction : restrictionList) {
+											total++;
+											success++;
+											AddRestriction data = new AddRestriction(
+													contentId, restriction.name(), true, addUser);
+											logSkip(true, data, "Content is not restricted");
+										}
 									}
 								}
-							}
-							if (addGroups != null) {
-								for (String addGroup: addGroups) { 
-									for (CloudContentRestriction restriction : restrictionList) {
-										total++;
-										success++;
-										AddRestriction data = new AddRestriction(
-												contentId, restriction.name(), false, addGroup);
-										logSkip(true, data, "Content is not restricted");
+								if (addGroups != null) {
+									for (String addGroup: addGroups) { 
+										for (CloudContentRestriction restriction : restrictionList) {
+											total++;
+											success++;
+											AddRestriction data = new AddRestriction(
+													contentId, restriction.name(), false, addGroup);
+											logSkip(true, data, "Content is not restricted");
+										}
 									}
 								}
-							}
-							if (removeUsers != null) {
-								for (String removeUser: removeUsers) { 
-									for (CloudContentRestriction restriction : restrictionList) {
-										total++;
-										success++;
-										AddRestriction data = new AddRestriction(
-												contentId, restriction.name(), true, removeUser);
-										logSkip(false, data, "Content is not restricted");
+								if (removeUsers != null) {
+									for (String removeUser: removeUsers) { 
+										for (CloudContentRestriction restriction : restrictionList) {
+											total++;
+											success++;
+											AddRestriction data = new AddRestriction(
+													contentId, restriction.name(), true, removeUser);
+											logSkip(false, data, "Content is not restricted");
+										}
 									}
 								}
-							}
-							if (removeGroups != null) {
-								for (String removeGroup: removeGroups) { 
-									for (CloudContentRestriction restriction : restrictionList) {
-										total++;
-										success++;
-										AddRestriction data = new AddRestriction(
-												contentId, restriction.name(), false, removeGroup);
-										logSkip(false, data, "Content is not restricted");
+								if (removeGroups != null) {
+									for (String removeGroup: removeGroups) { 
+										for (CloudContentRestriction restriction : restrictionList) {
+											total++;
+											success++;
+											AddRestriction data = new AddRestriction(
+													contentId, restriction.name(), false, removeGroup);
+											logSkip(false, data, "Content is not restricted");
+										}
 									}
 								}
+								continue;	// Skip this content ID
 							}
-							continue;	// Skip this content ID
+						} else {
+							Log.error(LOGGER, "Failed to check content restriction", resp.readEntity(String.class));
 						}
-					} else {
-						Log.error(LOGGER, "Failed to check content restriction", resp.readEntity(String.class));
+					} catch (Exception ex) {
+						Log.error(LOGGER, "Failed to check content restriction", ex);
 					}
-				} catch (Exception ex) {
-					Log.error(LOGGER, "Failed to check content restriction", ex);
-				}
-				if (addUsers != null) {
-					for (String addUser: addUsers) { 
-						for (CloudContentRestriction restriction : restrictionList) {
-							total++;
-							AddRestriction data = new AddRestriction(contentId, restriction.name(), true, addUser);
-							try {
-								Map<String, String> replacements = new HashMap<>();
-								replacements.put("id", contentId);
-								replacements.put("operationKey", restriction.name());
-								Map<String, Object> query = new HashMap<>();
-								query.put("accountId", addUser);
-								Response resp = WebRequest.invoke(
-										scheme, host, PATH_CLOUD_RESTRICTION_ADD_USER, replacements, 
-										HttpMethod.PUT, admin, password, null, null, query, null);
-								if (logResult(true, data, resp)) {
-									success++;
+					if (addUsers != null) {
+						for (String addUser: addUsers) { 
+							for (CloudContentRestriction restriction : restrictionList) {
+								total++;
+								AddRestriction data = new AddRestriction(
+										contentId, restriction.name(), true, addUser);
+								try {
+									Map<String, String> replacements = new HashMap<>();
+									replacements.put("id", contentId);
+									replacements.put("operationKey", restriction.name());
+									Map<String, Object> query = new HashMap<>();
+									query.put("accountId", addUser);
+									Response resp = WebRequest.invoke(
+											scheme, host, PATH_CLOUD_RESTRICTION_ADD_USER, replacements, 
+											HttpMethod.PUT, admin, password, null, null, query, null);
+									if (logResult(true, data, resp)) {
+										success++;
+									} else {
+										failedContent.get(content.getKey()).add(contentId);
+									}
+								} catch (Exception ex) {
+									logError(true, data, ex.getMessage());
+									failedContent.get(content.getKey()).add(contentId);
 								}
-							} catch (Exception ex) {
-								logError(true, data, ex.getMessage());
 							}
 						}
 					}
-				}
-				if (addGroups != null) {
-					for (String addGroup : addGroups) { 
-						for (CloudContentRestriction restriction : restrictionList) {
-							total++;
-							AddRestriction data = new AddRestriction(contentId, restriction.name(), false, addGroup);
-							try {
-								Map<String, String> replacements = new HashMap<>();
-								replacements.put("id", contentId);
-								replacements.put("operationKey", restriction.name());
-								replacements.put("groupId", addGroup);
-								Response resp = WebRequest.invoke(
-										scheme, host, PATH_CLOUD_RESTRICTION_ADD_GROUP, replacements, 
-										HttpMethod.PUT, admin, password, null, null, null, null);
-								if (logResult(true, data, resp)) {
-									success++;
+					if (addGroups != null) {
+						for (String addGroup : addGroups) { 
+							for (CloudContentRestriction restriction : restrictionList) {
+								total++;
+								AddRestriction data = new AddRestriction(
+										contentId, restriction.name(), false, addGroup);
+								try {
+									Map<String, String> replacements = new HashMap<>();
+									replacements.put("id", contentId);
+									replacements.put("operationKey", restriction.name());
+									replacements.put("groupId", addGroup);
+									Response resp = WebRequest.invoke(
+											scheme, host, PATH_CLOUD_RESTRICTION_ADD_GROUP, replacements, 
+											HttpMethod.PUT, admin, password, null, null, null, null);
+									if (logResult(true, data, resp)) {
+										success++;
+									} else {
+										failedContent.get(content.getKey()).add(contentId);
+									}
+								} catch (Exception ex) {
+									logError(true, data, ex.getMessage());
+									failedContent.get(content.getKey()).add(contentId);
 								}
-							} catch (Exception ex) {
-								logError(true, data, ex.getMessage());
 							}
 						}
 					}
-				}
-				if (removeUsers != null) {
-					for (String removeUser: removeUsers) { 
-						for (CloudContentRestriction restriction : restrictionList) {
-							total++;
-							AddRestriction data = new AddRestriction(contentId, restriction.name(), true, removeUser);
-							try {
-								Map<String, String> replacements = new HashMap<>();
-								replacements.put("id", contentId);
-								replacements.put("operationKey", restriction.name());
-								Map<String, Object> query = new HashMap<>();
-								query.put("accountId", removeUser);
-								Response resp = WebRequest.invoke(
-										scheme, host, PATH_CLOUD_RESTRICTION_REMOVE_USER, replacements, 
-										HttpMethod.DELETE, admin, password, null, null, query, null);
-								if (logResult(false, data, resp)) {
-									success++;
+					if (removeUsers != null) {
+						for (String removeUser: removeUsers) { 
+							for (CloudContentRestriction restriction : restrictionList) {
+								total++;
+								AddRestriction data = new AddRestriction(
+										contentId, restriction.name(), true, removeUser);
+								try {
+									Map<String, String> replacements = new HashMap<>();
+									replacements.put("id", contentId);
+									replacements.put("operationKey", restriction.name());
+									Map<String, Object> query = new HashMap<>();
+									query.put("accountId", removeUser);
+									Response resp = WebRequest.invoke(
+											scheme, host, PATH_CLOUD_RESTRICTION_REMOVE_USER, replacements, 
+											HttpMethod.DELETE, admin, password, null, null, query, null);
+									if (logResult(false, data, resp)) {
+										success++;
+									} else {
+										failedContent.get(content.getKey()).add(contentId);
+									}
+								} catch (Exception ex) {
+									logError(false, data, ex.getMessage());
+									failedContent.get(content.getKey()).add(contentId);
 								}
-							} catch (Exception ex) {
-								logError(false, data, ex.getMessage());
 							}
 						}
 					}
-				}
-				if (removeGroups != null) {
-					for (String removeGroup : removeGroups) { 
-						for (CloudContentRestriction restriction : restrictionList) {
-							total++;
-							AddRestriction data = new AddRestriction(contentId, restriction.name(), false, removeGroup);
-							try {
-								Map<String, String> replacements = new HashMap<>();
-								replacements.put("id", contentId);
-								replacements.put("operationKey", restriction.name());
-								replacements.put("groupId", removeGroup);
-								Response resp = WebRequest.invoke(
-										scheme, host, PATH_CLOUD_RESTRICTION_REMOVE_GROUP, replacements, 
-										HttpMethod.DELETE, admin, password, null, null, null, null);
-								if (logResult(false, data, resp)) {
-									success++;
+					if (removeGroups != null) {
+						for (String removeGroup : removeGroups) { 
+							for (CloudContentRestriction restriction : restrictionList) {
+								total++;
+								AddRestriction data = new AddRestriction(
+										contentId, restriction.name(), false, removeGroup);
+								try {
+									Map<String, String> replacements = new HashMap<>();
+									replacements.put("id", contentId);
+									replacements.put("operationKey", restriction.name());
+									replacements.put("groupId", removeGroup);
+									Response resp = WebRequest.invoke(
+											scheme, host, PATH_CLOUD_RESTRICTION_REMOVE_GROUP, replacements, 
+											HttpMethod.DELETE, admin, password, null, null, null, null);
+									if (logResult(false, data, resp)) {
+										success++;
+									} else {
+										failedContent.get(content.getKey()).add(contentId);
+									}
+								} catch (Exception ex) {
+									logError(false, data, ex.getMessage());
+									failedContent.get(content.getKey()).add(contentId);
 								}
-							} catch (Exception ex) {
-								logError(false, data, ex.getMessage());
 							}
 						}
 					}
-				}
-			}
+				}	// content list
+			}	// contentMap
 		} catch (ParseException pex) {
 			// Ignore
 			return false;
@@ -1585,6 +1708,16 @@ public class PermissionTool {
 			Log.error(LOGGER, "Unable to read password", ioex);
 		}
 		Log.info(LOGGER, "Success/total: " + success + "/" + total);
+		for (Map.Entry<String, Set<String>> entry : failedContent.entrySet()) {
+			if (entry.getValue().size() != 0) {
+				StringBuilder sb = new StringBuilder();
+				for (String contentId : entry.getValue()) {
+					sb.append(contentId).append(" ");
+				}
+				Log.error(LOGGER, 
+						"Failed Space: " + entry.getKey() + "; Failed Content: " + sb.toString());
+			}
+		}
 		return true;
 	}
 	
@@ -1666,8 +1799,8 @@ public class PermissionTool {
 		try {
 			CommandLineParser parser = new DefaultParser();
 			CommandLine cmd = parser.parse(cloudContentListOptions, args, true);
-			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, "100"));
-			int period = Integer.parseInt(cmd.getOptionValue(periodOption, "1000"));
+			int rate = Integer.parseInt(cmd.getOptionValue(rateOption, DEFAULT_RATE));
+			int period = Integer.parseInt(cmd.getOptionValue(periodOption, DEFAULT_PERIOD));
 			WebRequest.setRate(rate, period);
 			String scheme = cmd.getOptionValue(schemeOption, DEFAULT_SCHEME);
 			String host = cmd.getOptionValue(hostOption);
